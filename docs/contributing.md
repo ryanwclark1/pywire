@@ -3,7 +3,10 @@
 Thanks for considering a contribution. This page explains the
 local-development workflow; the
 [versioning policy](versioning.md) and
-[release process](releasing.md) live on their own pages.
+[release process](releasing.md) live on their own pages, and the
+[binding strategy](https://github.com/ryanwclark1/pywire/blob/main/BINDING_STRATEGY.md)
+explains how new pgwire surface should be exposed to Python — read it
+before opening a PR that adds a new binding.
 
 ## Development setup
 
