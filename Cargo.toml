@@ -1,0 +1,12 @@
+[package]
+name = "pywire"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "pywire"
+crate-type = ["cdylib"]
+
+[dependencies]
+pgwire = { version = "0.40.0", default-features = false }
+pyo3 = { version = "0.22.6", features = ["abi3-py39"] }

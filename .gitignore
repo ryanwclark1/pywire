@@ -1,0 +1,6 @@
+/target/
+**/__pycache__/
+.pytest_cache/
+
+/pywire/*.so
+/Cargo.lock
