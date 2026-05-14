@@ -1,5 +1,8 @@
 # pywire
 
+[![CI](https://github.com/ryanwclark1/pywire/actions/workflows/ci.yml/badge.svg)](https://github.com/ryanwclark1/pywire/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/ryanwclark1/pywire/graph/badge.svg)](https://codecov.io/gh/ryanwclark1/pywire)
+
 Python bindings for the Rust [`pgwire`](https://crates.io/crates/pgwire) crate.
 
 pywire lets you build PostgreSQL-wire-protocol services in Python with the

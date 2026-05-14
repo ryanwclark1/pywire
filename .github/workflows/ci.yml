@@ -73,6 +73,8 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
 
       - uses: Swatinem/rust-cache@v2
 
@@ -84,12 +86,34 @@ jobs:
       - name: Install build and test deps
         run: pip install maturin pytest pytest-cov hypothesis
 
+      # The coverage cell drives cargo test + pytest itself; everything
+      # else runs the standard build+test path.
       - name: Build and install the extension
+        if: matrix.os != 'ubuntu-latest' || matrix.python != '3.12'
         run: maturin develop --release
 
       - name: Run pytest
+        if: matrix.os != 'ubuntu-latest' || matrix.python != '3.12'
         run: pytest -q
 
-      - name: cargo test
+      - name: Run full coverage gate
         if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
-        run: cargo test
+        run: bash scripts/coverage.sh
+
+      - name: Upload Python coverage to Codecov
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
+        uses: codecov/codecov-action@v5
+        with:
+          files: python-cov.xml
+          flags: python
+          fail_ci_if_error: true
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+      - name: Upload Rust coverage to Codecov
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
+        uses: codecov/codecov-action@v5
+        with:
+          files: rust-cov.lcov
+          flags: rust
+          fail_ci_if_error: true
+          token: ${{ secrets.CODECOV_TOKEN }}

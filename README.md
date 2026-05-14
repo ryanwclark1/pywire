@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/ryanwclark1/pywire/actions/workflows/ci.yml/badge.svg)](https://github.com/ryanwclark1/pywire/actions/workflows/ci.yml)
 [![Docs](https://github.com/ryanwclark1/pywire/actions/workflows/docs.yml/badge.svg)](https://ryanwclark1.github.io/pywire/)
+[![codecov](https://codecov.io/gh/ryanwclark1/pywire/graph/badge.svg)](https://codecov.io/gh/ryanwclark1/pywire)
 
 Python bindings for the Rust [`pgwire`](https://crates.io/crates/pgwire) library.
 

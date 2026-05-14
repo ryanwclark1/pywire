@@ -35,6 +35,9 @@ ruff check .
 ruff format --check .
 mypy
 pytest -q
+
+# Combined coverage gate (also enforced in CI)
+bash scripts/coverage.sh
 ```
 
 After any change to the Rust source, rebuild the extension before re-running
@@ -43,6 +46,39 @@ pytest:
 ```bash
 maturin develop --release
 ```
+
+## Coverage policy
+
+Both Python and Rust must maintain **100% line and function coverage**.
+The gate is enforced in CI by `scripts/coverage.sh` and re-verified in the
+release workflow before any wheel is published.
+
+If a line genuinely cannot be reached from a test, mark it `# pragma: no
+cover` on the Python side and explain why in a one-line comment that gets
+reviewed in the PR diff. Rust currently lacks a clean stable-channel
+inline exclusion mechanism; we work around it by exempting region
+coverage from the gate (the macro-expanded `?` paths inside
+`wrap_pyfunction!`/`pymodule` can't be reached from happy-path tests on
+stable Rust). Region coverage is reported as informational only.
+
+## Commit message style
+
+This repo follows
+[Conventional Commits](https://www.conventionalcommits.org/). The release
+tooling (`release-please`) reads commit subjects to compute the next
+version and to generate `CHANGELOG.md`. Use these subject prefixes:
+
+- `feat:` — new public surface (any binding addition)
+- `fix:` — bug fix
+- `docs:` — docs-only change
+- `test:` — test-only change
+- `ci:` — CI/workflow change
+- `chore:` — release/scaffolding/bookkeeping
+- `refactor:` / `perf:` — internal change
+
+Breaking changes go in the body, prefixed `BREAKING CHANGE:` (or use
+`feat!:` / `fix!:` shorthand). release-please bumps the major (or, in our
+pre-1.0 phase, the minor) on `BREAKING CHANGE:` commits.
 
 ## Security and supply chain
 

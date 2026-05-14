@@ -18,7 +18,46 @@ permissions:
   contents: read
 
 jobs:
+  # Pre-publish gate: re-run lint + audit + coverage at the tagged ref.
+  # No wheel job starts until this is green.
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy, llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install python deps
+        run: pip install ruff mypy maturin pytest pytest-cov hypothesis
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+      - name: cargo clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: ruff check
+        run: ruff check .
+      - name: ruff format --check
+        run: ruff format --check .
+      - name: mypy
+        run: mypy
+      - name: actionlint
+        run: |
+          bash <(curl -sSf https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+          ./actionlint -color
+        shell: bash
+      - name: cargo-deny
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories licenses sources bans
+      - name: Coverage gate (100% lines + functions)
+        run: bash scripts/coverage.sh
+
   linux:
+    needs: verify
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -42,6 +81,7 @@ jobs:
           path: dist
 
   musllinux:
+    needs: verify
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -65,6 +105,7 @@ jobs:
           path: dist
 
   macos:
+    needs: verify
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -83,6 +124,7 @@ jobs:
           path: dist
 
   windows:
+    needs: verify
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -101,6 +143,7 @@ jobs:
           path: dist
 
   sdist:
+    needs: verify
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

@@ -9,4 +9,6 @@ crate-type = ["cdylib"]
 
 [dependencies]
 pgwire = { version = "0.40.0", default-features = false }
-pyo3 = { version = "0.22.6", features = ["abi3-py39"] }
+pyo3 = { version = "0.28.3", features = ["abi3-py39"] }
+pyo3-async-runtimes = { version = "0.28", features = ["tokio-runtime"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

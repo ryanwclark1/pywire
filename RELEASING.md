@@ -27,24 +27,30 @@ cutting a release.
 
 ## Per-release checklist
 
-1. Decide the new version per [`VERSIONING.md`](https://github.com/ryanwclark1/pywire/blob/main/VERSIONING.md).
-2. Update `Cargo.toml` and `pyproject.toml` to the new version. Both must
-   match the tag, or the release workflow's guard step fails.
-3. Update `Cargo.lock` (`cargo update -p pywire`) and `CHANGELOG.md` if
-   present.
-4. Commit, open a PR, get it merged to `main`.
-5. From `main`:
-   ```bash
-   git pull
-   git tag -s "vX.Y.Z" -m "vX.Y.Z"
-   git push origin "vX.Y.Z"
-   ```
-6. The `Release` workflow:
+Most of the work is automated by
+[release-please](https://github.com/googleapis/release-please): every push
+to `main` updates an open "release PR" that bumps versions in
+`Cargo.toml` + `pyproject.toml` + `.release-please-manifest.json` and
+appends to `CHANGELOG.md` based on
+[Conventional Commits](https://www.conventionalcommits.org/).
+
+1. Merge any pending work into `main`. Each commit subject **must** follow
+   Conventional Commits (`feat:`, `fix:`, `docs:`, …); see
+   [`docs/contributing.md`](https://github.com/ryanwclark1/pywire/blob/main/docs/contributing.md).
+2. Review the open release-please PR. Confirm the proposed version aligns
+   with [`VERSIONING.md`](https://github.com/ryanwclark1/pywire/blob/main/VERSIONING.md)
+   (the major/minor mirrors upstream pgwire).
+3. Merge the release-please PR. release-please then:
+   - tags the merge commit `vX.Y.Z`;
+   - the **Release** workflow fires on the tag push.
+4. The `Release` workflow:
+   - **first** runs the `verify` job (lint, audit, coverage gate at 100%
+     line + function) on the tagged ref; nothing publishes if this fails;
    - builds wheels for manylinux + musllinux (x86_64 + aarch64), macOS
      universal2, Windows x86_64, plus an sdist;
    - publishes everything to PyPI via Trusted Publishing;
-   - creates a GitHub Release with auto-generated notes.
-7. Verify the release on
+   - creates a GitHub Release with the release-please-rendered notes.
+5. Verify the release on
    [PyPI](https://pypi.org/project/pywire/#history) and install it in a
    clean venv:
    ```bash

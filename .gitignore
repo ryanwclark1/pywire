@@ -4,6 +4,11 @@
 .mypy_cache/
 .ruff_cache/
 .coverage
+.coverage.*
+/python-cov.xml
+/rust-cov.lcov
+*.profraw
+*.profdata
 htmlcov/
 /site/
 
