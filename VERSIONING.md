@@ -37,7 +37,7 @@ stability stronger than upstream.**
 | Upstream change         | Action on pywire side                                                                                                              |
 | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
 | Patch (`0.Y.z+1`)       | Dependabot opens a PR. Merge, run tests, release pywire `0.Y.Z+1`.                                                                 |
-| Minor (`0.Y+1.0`)       | The [upstream tracker workflow](.github/workflows/upstream-tracker.yml) opens an issue. Plan the migration, address API breakage, release pywire `0.Y+1.0`. |
+| Minor (`0.Y+1.0`)       | The [upstream tracker workflow](https://github.com/ryanwclark1/pywire/blob/main/.github/workflows/upstream-tracker.yml) opens an issue. Plan the migration, address API breakage, release pywire `0.Y+1.0`. |
 | Major (`X+1.0.0`)       | Same as minor: tracker issue, migration, release pywire `X+1.0.0`.                                                                 |
 
 ## Yanking and security fixes
@@ -58,8 +58,8 @@ Two complementary mechanisms:
    them).
 
 The detection logic lives in
-[`scripts/check_pgwire_release.py`](scripts/check_pgwire_release.py) and can
-be run locally:
+[`scripts/check_pgwire_release.py`](https://github.com/ryanwclark1/pywire/blob/main/scripts/check_pgwire_release.py)
+and can be run locally:
 
 ```bash
 python scripts/check_pgwire_release.py

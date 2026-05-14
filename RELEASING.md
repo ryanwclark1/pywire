@@ -6,7 +6,7 @@ GitHub Actions using
 No long-lived API tokens are stored anywhere; the workflow exchanges its
 GitHub OIDC token for a short-lived PyPI upload token at publish time.
 
-The version policy lives in [`VERSIONING.md`](VERSIONING.md). Read it before
+The version policy lives in [`VERSIONING.md`](https://github.com/ryanwclark1/pywire/blob/main/VERSIONING.md). Read it before
 cutting a release.
 
 ## One-time setup (project maintainers)
@@ -27,7 +27,7 @@ cutting a release.
 
 ## Per-release checklist
 
-1. Decide the new version per [`VERSIONING.md`](VERSIONING.md).
+1. Decide the new version per [`VERSIONING.md`](https://github.com/ryanwclark1/pywire/blob/main/VERSIONING.md).
 2. Update `Cargo.toml` and `pyproject.toml` to the new version. Both must
    match the tag, or the release workflow's guard step fails.
 3. Update `Cargo.lock` (`cargo update -p pywire`) and `CHANGELOG.md` if
@@ -71,5 +71,5 @@ environment, so production credentials are never involved.
 
 If a published release is broken, yank it from PyPI immediately
 ([PyPI yank docs](https://pypi.org/help/#yanked)) and ship a corrected
-patch release per [`VERSIONING.md`](VERSIONING.md). We do not maintain
+patch release per [`VERSIONING.md`](https://github.com/ryanwclark1/pywire/blob/main/VERSIONING.md). We do not maintain
 release branches for older minors.
