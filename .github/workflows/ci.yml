@@ -82,10 +82,14 @@ jobs:
           cache: pip
 
       - name: Install build and test deps
-        run: pip install maturin pytest
+        run: pip install maturin pytest pytest-cov hypothesis
 
       - name: Build and install the extension
         run: maturin develop --release
 
       - name: Run pytest
         run: pytest -q
+
+      - name: cargo test
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
+        run: cargo test

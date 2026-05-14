@@ -9,7 +9,14 @@ description = "Python bindings for the Rust pgwire library"
 requires-python = ">=3.9"
 
 [project.optional-dependencies]
-dev = ["pytest", "ruff", "mypy", "maturin>=1.8,<2.0"]
+dev = [
+  "pytest",
+  "pytest-cov",
+  "hypothesis",
+  "ruff",
+  "mypy",
+  "maturin>=1.8,<2.0",
+]
 
 [tool.maturin]
 python-source = "."
@@ -19,6 +26,20 @@ include = [{ path = "pywire/py.typed", format = "wheel" }, { path = "pywire/_pyw
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "--cov=pywire --cov-report=term-missing"
+
+[tool.coverage.run]
+source = ["pywire"]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = [
+  "pragma: no cover",
+  "if TYPE_CHECKING:",
+  "raise NotImplementedError",
+]
+show_missing = true
+fail_under = 80
 
 [tool.ruff]
 line-length = 100
@@ -37,3 +58,8 @@ exclude = "target/"
 [[tool.mypy.overrides]]
 module = "tests.*"
 disallow_untyped_defs = false
+disallow_untyped_decorators = false
+
+[[tool.mypy.overrides]]
+module = "hypothesis"
+ignore_missing_imports = true
