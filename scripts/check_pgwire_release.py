@@ -32,9 +32,7 @@ from pathlib import Path
 
 CRATES_API = "https://crates.io/api/v1/crates/pgwire"
 USER_AGENT = "pywire-upstream-tracker (https://github.com/ryanwclark1/pywire)"
-VERSION_RE = re.compile(
-    r'pgwire\s*=\s*\{[^}]*version\s*=\s*"([^"]+)"', re.MULTILINE
-)
+VERSION_RE = re.compile(r'pgwire\s*=\s*\{[^}]*version\s*=\s*"([^"]+)"', re.MULTILINE)
 
 
 def read_pinned_version(cargo_toml: Path) -> str:

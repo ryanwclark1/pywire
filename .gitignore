@@ -3,4 +3,3 @@
 .pytest_cache/
 
 /pywire/*.so
-/Cargo.lock
