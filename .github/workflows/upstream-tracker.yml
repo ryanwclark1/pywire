@@ -1,0 +1,67 @@
+name: Upstream pgwire release tracker
+
+on:
+  schedule:
+    # Mondays at 13:00 UTC
+    - cron: "0 13 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check for new pgwire release
+        id: check
+        run: python scripts/check_pgwire_release.py
+
+      - name: Open or update tracking issue
+        if: steps.check.outputs.action_needed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CURRENT: ${{ steps.check.outputs.current }}
+          LATEST: ${{ steps.check.outputs.latest }}
+        run: |
+          set -euo pipefail
+          title="Track pgwire ${LATEST} (currently pinned to ${CURRENT})"
+          existing=$(gh issue list \
+            --label upstream-update \
+            --state open \
+            --search "${title} in:title" \
+            --json number --jq 'length')
+          if [ "${existing}" != "0" ]; then
+            echo "Tracking issue already open; nothing to do."
+            exit 0
+          fi
+          body=$(cat <<EOF
+          A new pgwire release is available upstream.
+
+          - Currently pinned: \`${CURRENT}\`
+          - Latest on crates.io: \`${LATEST}\`
+
+          Per [VERSIONING.md](../VERSIONING.md), a new pgwire minor or major
+          requires a corresponding pywire minor or major bump. Suggested steps:
+
+          1. Update \`Cargo.toml\` to \`pgwire = "${LATEST}"\`.
+          2. Update \`pyproject.toml\` version to \`${LATEST}\` (binding-only
+             patch starts at \`.0\`).
+          3. Address API breakage; consult the pgwire CHANGELOG.
+          4. Update \`CHANGELOG.md\` / release notes.
+          5. Tag \`v${LATEST}\` to trigger the release workflow.
+
+          Opened automatically by \`.github/workflows/upstream-tracker.yml\`.
+          EOF
+          )
+          gh issue create \
+            --label upstream-update \
+            --title "${title}" \
+            --body "${body}"
