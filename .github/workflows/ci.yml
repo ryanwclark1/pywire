@@ -35,8 +35,8 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - name: Install ruff
-        run: pip install ruff
+      - name: Install python lint deps
+        run: pip install ruff mypy
 
       - name: ruff check
         run: ruff check .
@@ -44,8 +44,25 @@ jobs:
       - name: ruff format --check
         run: ruff format --check .
 
+      - name: mypy
+        run: mypy
+
+      - name: actionlint
+        run: |
+          bash <(curl -sSf https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+          ./actionlint -color
+        shell: bash
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories licenses sources bans
+
   test:
-    needs: lint
+    needs: [lint, audit]
     strategy:
       fail-fast: false
       matrix:

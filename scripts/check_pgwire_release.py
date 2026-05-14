@@ -29,6 +29,7 @@ import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
+from typing import Any
 
 CRATES_API = "https://crates.io/api/v1/crates/pgwire"
 USER_AGENT = "pywire-upstream-tracker (https://github.com/ryanwclark1/pywire)"
@@ -47,12 +48,12 @@ def fetch_latest_stable() -> str:
     req = urllib.request.Request(CRATES_API, headers={"User-Agent": USER_AGENT})
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
-            data = json.load(resp)
+            data: dict[str, Any] = json.load(resp)
     except urllib.error.URLError as exc:
         raise SystemExit(f"crates.io request failed: {exc}") from exc
 
     for version in data.get("versions", []):
-        num = version.get("num", "")
+        num = str(version.get("num", ""))
         if version.get("yanked"):
             continue
         if "-" in num:  # prerelease
