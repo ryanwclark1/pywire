@@ -140,8 +140,13 @@ Each item is one PR with tests and docs.
    subclass into pgwire's `SimpleQueryHandler` trait via the runtime
    bridge. The connection state machine that drives the trait against
    a socket is part of `pywire.server` (PR I).
-6. **Extended query** (`pywire.query.ExtendedQueryHandler`). Prepared
-   statements + portals.
+6. 🟡 **Extended query** (`pywire.query.ExtendedQueryHandler`).
+   Python ABC + dataclasses (`PreparedStatement`, `Portal`,
+   `DescribeStatementResponse`, `DescribePortalResponse`) shipped.
+   The Rust adapter and connection-state machine wiring land with
+   `pywire.server` (PR I); the server will provide a default impl
+   that forwards Execute to `SimpleQueryHandler.do_query` for
+   handlers that don't need prepared statements.
 7. **COPY** (`pywire.copy`). The bulk-transfer protocol.
 8. **Server** (`pywire.server`). The high-level
    `await pywire.serve(handler, "127.0.0.1:5432")` entry point.

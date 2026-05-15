@@ -195,3 +195,101 @@ async def test_adapter_propagates_python_exception():
 
     with pytest.raises(Exception, match="cancel"):
         await _test_drive_handler(Boom(), "SELECT 1")
+
+
+# ---- Extended query shapes -------------------------------------------
+
+
+def test_prepared_statement_dataclass():
+    stmt = query.PreparedStatement(
+        name="s1",
+        query="SELECT $1::int",
+        parameter_types=[23],
+    )
+    assert stmt.name == "s1"
+    assert stmt.parameter_types == [23]
+    # frozen
+    with pytest.raises(AttributeError):
+        stmt.name = "s2"  # type: ignore[misc]
+
+
+def test_portal_dataclass():
+    stmt = query.PreparedStatement(name="", query="SELECT 1", parameter_types=[])
+    portal = query.Portal(
+        name="p1",
+        statement=stmt,
+        parameters=[b"42"],
+        result_formats=[0],
+    )
+    assert portal.statement is stmt
+    assert portal.parameters == [b"42"]
+
+
+def test_describe_statement_response():
+    r = query.DescribeStatementResponse(
+        parameter_types=[23],
+        fields=[query.FieldInfo("v", type_id=25)],
+    )
+    assert r.parameter_types == [23]
+    assert r.fields[0].name == "v"
+
+
+def test_describe_portal_response():
+    r = query.DescribePortalResponse(fields=[query.FieldInfo("x")])
+    assert len(r.fields) == 1
+
+
+def test_extended_query_handler_is_abstract():
+    with pytest.raises(TypeError):
+        query.ExtendedQueryHandler()  # type: ignore[abstract]
+
+
+async def test_extended_query_handler_concrete_subclass():
+    class NoopExtended(query.ExtendedQueryHandler):
+        async def parse_statement(
+            self,
+            name: str,
+            q: str,
+            parameter_types: list[int],
+        ) -> query.PreparedStatement:
+            return query.PreparedStatement(name=name, query=q, parameter_types=parameter_types)
+
+        async def describe_statement(
+            self,
+            statement: query.PreparedStatement,
+        ) -> query.DescribeStatementResponse:
+            return query.DescribeStatementResponse(
+                parameter_types=statement.parameter_types,
+                fields=[],
+            )
+
+        async def bind_portal(
+            self,
+            name: str,
+            statement: query.PreparedStatement,
+            parameters: list[bytes | None],
+            result_formats: list[int],
+        ) -> query.Portal:
+            return query.Portal(
+                name=name,
+                statement=statement,
+                parameters=parameters,
+                result_formats=result_formats,
+            )
+
+        async def describe_portal(self, portal: query.Portal) -> query.DescribePortalResponse:
+            return query.DescribePortalResponse(fields=[])
+
+        async def do_query(self, portal: query.Portal, max_rows: int) -> query.Response:
+            return query.Response.execution("SELECT", rows=0)
+
+    h = NoopExtended()
+    stmt = await h.parse_statement("s1", "SELECT 1", [])
+    assert stmt.name == "s1"
+    portal = await h.bind_portal("p1", stmt, [], [])
+    assert portal.statement is stmt
+    resp = await h.do_query(portal, 0)
+    assert resp.kind == "execution"
+    # default no-ops:
+    await h.close_statement("s1")
+    await h.close_portal("p1")
