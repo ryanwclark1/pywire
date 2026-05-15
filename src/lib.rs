@@ -1,6 +1,7 @@
 use pgwire::messages::startup::Startup;
 use pyo3::prelude::*;
 
+mod auth;
 mod errors;
 mod messages;
 mod runtime;
@@ -20,6 +21,7 @@ fn _pywire(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(supported_protocol_range, m)?)?;
     errors::register(m)?;
     messages::register(m)?;
+    auth::register(m)?;
     runtime::register(m)?;
     Ok(())
 }

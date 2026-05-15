@@ -126,9 +126,13 @@ Each item is one PR with tests and docs.
 3. **Shared types** (`pywire.messages.types`). `DataRow`,
    `FieldDescription`, `Tag`, `Oid`, etc. Trivial dataclass-shaped
    wrappers.
-4. **Auth** (`pywire.auth`). The `StartupHandler` and `AuthSource`
-   analogues, surfaced as Python ABCs the user subclasses. Cleartext +
-   MD5 + SCRAM-SHA-256 first.
+4. 🟡 **Auth** (`pywire.auth`). User-facing surface shipped:
+   `LoginInfo`, `Password`, the `AuthSource` async ABC, plus the
+   internal Rust adapter (`PyAuthSource`) that wires a Python
+   subclass into pgwire's `AuthSource` trait. The startup handlers
+   (`CleartextPasswordHandler`, `Md5PasswordHandler`,
+   `SaslScramHandler`) are part of `pywire.server` (PR I) since
+   pgwire's handlers are generic over the connection type.
 5. **Simple query** (`pywire.query.SimpleQueryHandler`). The smaller of
    the two query protocols. Implement first; extended query reuses the
    same response types.

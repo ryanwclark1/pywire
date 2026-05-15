@@ -64,6 +64,7 @@ nav:
       - Overview: api.md
       - Errors: api/errors.md
       - Messages: api/messages.md
+      - Auth: api/auth.md
   - Versioning: versioning.md
   - Releasing: releasing.md
   - Contributing: contributing.md
