@@ -153,8 +153,14 @@ Each item is one PR with tests and docs.
    `on_copy_done`) and `COPY TO STDOUT` (`start_copy_out` +
    `next_copy_out_chunk`). Rust adapter and connection wiring land
    with `pywire.server` (PR I).
-8. **Server** (`pywire.server`). The high-level
-   `await pywire.serve(handler, "127.0.0.1:5432")` entry point.
+8. 🟡 **Server** (`pywire.server`). `pywire.server.serve(simple_query,
+   addr)` ships. Wires a `SimpleQueryHandler` subclass through to
+   pgwire's `process_socket` accept loop via a Rust adapter that
+   implements `PgWireServerHandlers`. Per-connection tokio tasks
+   capture asyncio task locals via
+   `pyo3_async_runtimes::tokio::scope` so user coroutines can `await`
+   Python primitives from inside the accept loop. Currently no auth,
+   no extended query, no COPY, no TLS — these land in v0.40.1+.
 9. **Sync convenience** (`pywire.sync`). Optional layer wrapping the
    async API for users who don't want asyncio.
 

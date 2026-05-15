@@ -66,6 +66,7 @@ nav:
       - Messages: api/messages.md
       - Auth: api/auth.md
       - Query: api/query.md
+      - Server: api/server.md
   - Versioning: versioning.md
   - Releasing: releasing.md
   - Contributing: contributing.md

@@ -137,7 +137,15 @@ DECORATION_PATTERNS = [
     re.compile(r"^\s*\)\]\s*$"),
 ]
 
+# Explicit opt-out marker (LCOV convention). Append the marker to a
+# trailing comment on the line you want excluded. The line is then
+# treated like decoration: it doesn't count toward total or missed.
+LCOV_EXCL_LINE = "LCOV_EXCL_LINE"
+
+
 def is_decoration(source_line: str) -> bool:
+    if LCOV_EXCL_LINE in source_line:
+        return True
     return any(p.match(source_line) for p in DECORATION_PATTERNS)
 
 # Parse LCOV: per file, collect (line_no, exec_count) pairs.
