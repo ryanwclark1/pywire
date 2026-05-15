@@ -4,6 +4,7 @@ use pyo3::prelude::*;
 mod auth;
 mod errors;
 mod messages;
+mod query;
 mod runtime;
 
 fn protocol_range() -> (u16, u16) {
@@ -22,6 +23,7 @@ fn _pywire(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     errors::register(m)?;
     messages::register(m)?;
     auth::register(m)?;
+    query::register(m)?;
     runtime::register(m)?;
     Ok(())
 }

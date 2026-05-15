@@ -95,17 +95,17 @@ echo "==> Coverage summary"
   -ignore-filename-regex='/\.cargo/|/rustc/'
 
 echo "==> Enforcing 100% line coverage on hand-written code"
-# Detailed (file-level) coverage in JSON so we can filter out the lines
-# that pyo3's macros decorate but no runtime actually executes. Write to
-# a file because the JSON is too large to fit in a shell variable.
-DETAIL_FILE="$(pwd)/target/cov-detail.json"
-export DETAIL_FILE
+# Use LCOV-format coverage (matches what Codecov ingests) for the gate.
+# `DA:<line>,<count>` lines give a clean per-line view; we exempt
+# lines whose source matches a pyo3 macro decoration pattern.
+LCOV_FILE="$(pwd)/target/cov-summary.lcov"
+export LCOV_FILE
 "$LLVM_COV" export \
   "$SO_PATH" \
   -object "$TEST_BIN" \
   -instr-profile="$PROFDATA" \
   -ignore-filename-regex='/\.cargo/|/rustc/' \
-  -format=text > "$DETAIL_FILE" 2>/dev/null
+  -format=lcov > "$LCOV_FILE" 2>/dev/null
 
 # We exempt two classes of "lines" from the strict 100% gate:
 #
@@ -125,7 +125,6 @@ export DETAIL_FILE
 # reported so PR review can sanity-check that it's actually decoration.
 
 python3 - <<'PY'
-import json
 import os
 import re
 import sys
@@ -135,54 +134,63 @@ DECORATION_PATTERNS = [
     re.compile(r"^\s*#\[pymethods\]\s*$"),
     re.compile(r"^\s*from_py_object\s*$"),
     re.compile(r"^\s*skip_from_py_object\s*$"),
-    re.compile(r"^\s*\)\]\s*$"),  # closing paren of multi-line #[pyclass(...)]
+    re.compile(r"^\s*\)\]\s*$"),
 ]
 
 def is_decoration(source_line: str) -> bool:
     return any(p.match(source_line) for p in DECORATION_PATTERNS)
 
-with open(os.environ["DETAIL_FILE"], "r", encoding="utf-8") as fh:
-    DETAIL = json.load(fh)
+# Parse LCOV: per file, collect (line_no, exec_count) pairs.
+current_file: str | None = None
+file_lines: dict[str, list[tuple[int, int]]] = {}
+with open(os.environ["LCOV_FILE"], "r", encoding="utf-8") as fh:
+    for raw in fh:
+        line = raw.rstrip()
+        if line.startswith("SF:"):
+            current_file = line[3:]
+            file_lines.setdefault(current_file, [])
+        elif line == "end_of_record":
+            current_file = None
+        elif line.startswith("DA:") and current_file is not None:
+            try:
+                line_no_str, count_str = line[3:].split(",", 1)
+                file_lines[current_file].append((int(line_no_str), int(count_str)))
+            except ValueError:
+                continue
 
 total = 0
 covered = 0
-exempted_decoration = []
+exempted_decoration: list[str] = []
+real_missed: list[str] = []
 
-for file_entry in DETAIL["data"][0]["files"]:
-    fname = file_entry["filename"]
+for fname, lines in file_lines.items():
     try:
         with open(fname, "r", encoding="utf-8") as fh:
             source = fh.readlines()
     except OSError:
         continue
-    # Roll segments up into per-line max-count so each source line is
-    # counted once even if it contains multiple regions.
-    line_counts: dict[int, int] = {}
-    for seg in file_entry.get("segments", []):
-        if not isinstance(seg, list) or len(seg) < 4:
-            continue
-        line_no, _col, count, has_count = seg[0], seg[1], seg[2], seg[3]
-        if not has_count:
-            continue
-        prev = line_counts.get(line_no)
-        if prev is None or count > prev:
-            line_counts[line_no] = count
-
-    for line_no, count in line_counts.items():
+    for line_no, count in lines:
         src_line = source[line_no - 1] if 1 <= line_no <= len(source) else ""
-        if is_decoration(src_line):
-            if count == 0:
-                exempted_decoration.append(f"{fname}:{line_no} {src_line.rstrip()}")
+        if count == 0 and is_decoration(src_line):
+            exempted_decoration.append(f"{fname}:{line_no} {src_line.rstrip()}")
             continue
         total += 1
         if count > 0:
             covered += 1
+        else:
+            real_missed.append(f"{fname}:{line_no} {src_line.rstrip()}")
 
 pct = (covered / total * 100.0) if total else 100.0
 print(f"  effective line coverage: {pct:.2f}%  ({covered}/{total})")
 if exempted_decoration:
     print(f"  exempted decoration lines: {len(exempted_decoration)}")
-    for line in exempted_decoration[:20]:
+    for line in exempted_decoration[:5]:
+        print(f"    {line}")
+    if len(exempted_decoration) > 5:
+        print(f"    ... and {len(exempted_decoration) - 5} more")
+if real_missed:
+    print(f"  uncovered hand-written lines: {len(real_missed)}")
+    for line in real_missed:
         print(f"    {line}")
 sys.exit(0 if pct >= 100.0 else 1)
 PY

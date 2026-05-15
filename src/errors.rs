@@ -109,12 +109,7 @@ create_exception!(pywire.errors, UserError, Error, "");
 /// struct so that the
 /// [PostgreSQL protocol error-fields reference](https://www.postgresql.org/docs/18/protocol-error-fields.html)
 /// reads as a straight key-by-key index.
-#[pyclass(
-    name = "ErrorInfo",
-    module = "pywire.errors",
-    frozen,
-    skip_from_py_object
-)]
+#[pyclass(name = "ErrorInfo", module = "pywire.errors", frozen, from_py_object)]
 #[derive(Clone, Debug)]
 pub struct PyErrorInfo {
     #[pyo3(get)]

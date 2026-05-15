@@ -133,9 +133,13 @@ Each item is one PR with tests and docs.
    (`CleartextPasswordHandler`, `Md5PasswordHandler`,
    `SaslScramHandler`) are part of `pywire.server` (PR I) since
    pgwire's handlers are generic over the connection type.
-5. **Simple query** (`pywire.query.SimpleQueryHandler`). The smaller of
-   the two query protocols. Implement first; extended query reuses the
-   same response types.
+5. 🟡 **Simple query** (`pywire.query`). User-facing surface shipped:
+   `SimpleQueryHandler` async ABC, `Response` tagged union (empty /
+   execution / query / error), `FieldInfo` column metadata, plus the
+   internal Rust adapter (`PyQueryHandler`) that wires a Python
+   subclass into pgwire's `SimpleQueryHandler` trait via the runtime
+   bridge. The connection state machine that drives the trait against
+   a socket is part of `pywire.server` (PR I).
 6. **Extended query** (`pywire.query.ExtendedQueryHandler`). Prepared
    statements + portals.
 7. **COPY** (`pywire.copy`). The bulk-transfer protocol.
