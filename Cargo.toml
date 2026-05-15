@@ -8,6 +8,7 @@ name = "pywire"
 crate-type = ["cdylib"]
 
 [dependencies]
+bytes = "1"
 pgwire = { version = "0.40.0", default-features = false }
 pyo3 = { version = "0.28.3", features = ["abi3-py39"] }
 pyo3-async-runtimes = { version = "0.28", features = ["tokio-runtime"] }

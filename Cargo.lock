@@ -247,6 +247,7 @@ dependencies = [
 name = "pywire"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "pgwire",
  "pyo3",
  "pyo3-async-runtimes",

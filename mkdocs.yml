@@ -63,6 +63,7 @@ nav:
   - API reference:
       - Overview: api.md
       - Errors: api/errors.md
+      - Messages: api/messages.md
   - Versioning: versioning.md
   - Releasing: releasing.md
   - Contributing: contributing.md

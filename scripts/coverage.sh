@@ -95,44 +95,96 @@ echo "==> Coverage summary"
   -ignore-filename-regex='/\.cargo/|/rustc/'
 
 echo "==> Enforcing 100% line coverage on hand-written code"
-JSON=$("$LLVM_COV" export \
+# Detailed (file-level) coverage in JSON so we can filter out the lines
+# that pyo3's macros decorate but no runtime actually executes. Write to
+# a file because the JSON is too large to fit in a shell variable.
+DETAIL_FILE="$(pwd)/target/cov-detail.json"
+export DETAIL_FILE
+"$LLVM_COV" export \
   "$SO_PATH" \
   -object "$TEST_BIN" \
   -instr-profile="$PROFDATA" \
   -ignore-filename-regex='/\.cargo/|/rustc/' \
-  -summary-only \
-  -format=text 2>/dev/null)
+  -format=text > "$DETAIL_FILE" 2>/dev/null
 
 # We exempt two classes of "lines" from the strict 100% gate:
 #
-# 1. Macro attribute roots (#[pyclass], #[pymethods] lines). These are
-#    decoration, not executable code, but llvm-cov counts them as one line
-#    each with zero execution.
+# 1. Macro attribute roots (#[pyclass], #[pymethods], `from_py_object`,
+#    etc.). These are decoration, not executable code, but llvm-cov
+#    counts them as a line each with zero execution because the expanded
+#    code runs at a different source location.
 # 2. pyo3-generated `___pymethod_*` dispatch wrappers. In pyo3 0.28 the
 #    runtime resolves these via a different code path; the wrappers exist
 #    in the binary but are unreachable. They show up as 0%-covered
 #    functions even though the underlying `__repr__` / `is_fatal` etc.
 #    *are* invoked via the alternate path and report as 100%.
 #
-# Rather than try to express these exemptions through cargo-llvm-cov's
-# (currently region-level only) exclusion mechanism, we enforce:
-#   - 100% line coverage on the .py files (already gated by pytest)
-#   - >= 99% line coverage on Rust (current state is ~99.65%, leaving
-#     room only for the small macro-decoration overhead)
-#   - region coverage is reported but not gated
-#
-# Each PR's review checks that any uncovered region is genuinely
-# macro-decoration; new logic without test coverage will drop below 99%.
+# The script extracts the per-line execution counts, drops "missed" lines
+# whose source matches the decoration patterns above, and gates on the
+# *effective* (post-exemption) coverage at 100%. Each exempted line is
+# reported so PR review can sanity-check that it's actually decoration.
 
-python3 - <<PY
-import json, sys
-totals = json.loads("""$JSON""")["data"][0]["totals"]
-lines = totals["lines"]["percent"]
-funcs = totals["functions"]["percent"]
-regions = totals["regions"]["percent"]
-print(f"  lines:     {lines:.2f}%")
-print(f"  functions: {funcs:.2f}% (informational; pyo3 dispatch dup'd)")
-print(f"  regions:   {regions:.2f}% (informational)")
-ok = lines >= 99.0
-sys.exit(0 if ok else 1)
+python3 - <<'PY'
+import json
+import os
+import re
+import sys
+
+DECORATION_PATTERNS = [
+    re.compile(r"^\s*#\[pyclass(?:\s*\(.*)?$"),
+    re.compile(r"^\s*#\[pymethods\]\s*$"),
+    re.compile(r"^\s*from_py_object\s*$"),
+    re.compile(r"^\s*skip_from_py_object\s*$"),
+    re.compile(r"^\s*\)\]\s*$"),  # closing paren of multi-line #[pyclass(...)]
+]
+
+def is_decoration(source_line: str) -> bool:
+    return any(p.match(source_line) for p in DECORATION_PATTERNS)
+
+with open(os.environ["DETAIL_FILE"], "r", encoding="utf-8") as fh:
+    DETAIL = json.load(fh)
+
+total = 0
+covered = 0
+exempted_decoration = []
+
+for file_entry in DETAIL["data"][0]["files"]:
+    fname = file_entry["filename"]
+    try:
+        with open(fname, "r", encoding="utf-8") as fh:
+            source = fh.readlines()
+    except OSError:
+        continue
+    # Roll segments up into per-line max-count so each source line is
+    # counted once even if it contains multiple regions.
+    line_counts: dict[int, int] = {}
+    for seg in file_entry.get("segments", []):
+        if not isinstance(seg, list) or len(seg) < 4:
+            continue
+        line_no, _col, count, has_count = seg[0], seg[1], seg[2], seg[3]
+        if not has_count:
+            continue
+        prev = line_counts.get(line_no)
+        if prev is None or count > prev:
+            line_counts[line_no] = count
+
+    for line_no, count in line_counts.items():
+        src_line = source[line_no - 1] if 1 <= line_no <= len(source) else ""
+        if is_decoration(src_line):
+            if count == 0:
+                exempted_decoration.append(f"{fname}:{line_no} {src_line.rstrip()}")
+            continue
+        total += 1
+        if count > 0:
+            covered += 1
+
+pct = (covered / total * 100.0) if total else 100.0
+print(f"  effective line coverage: {pct:.2f}%  ({covered}/{total})")
+if exempted_decoration:
+    print(f"  exempted decoration lines: {len(exempted_decoration)}")
+    for line in exempted_decoration[:20]:
+        print(f"    {line}")
+sys.exit(0 if pct >= 100.0 else 1)
 PY
+GATE_EXIT=$?
+exit $GATE_EXIT

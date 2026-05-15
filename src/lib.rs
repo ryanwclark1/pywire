@@ -2,6 +2,7 @@ use pgwire::messages::startup::Startup;
 use pyo3::prelude::*;
 
 mod errors;
+mod messages;
 
 fn protocol_range() -> (u16, u16) {
     (Startup::PG_PROTOCOL_EARLIEST, Startup::PG_PROTOCOL_LATEST)
@@ -16,6 +17,7 @@ fn supported_protocol_range() -> (u16, u16) {
 fn _pywire(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(supported_protocol_range, m)?)?;
     errors::register(m)?;
+    messages::register(m)?;
     Ok(())
 }
 

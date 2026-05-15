@@ -117,9 +117,12 @@ Each item is one PR with tests and docs.
 1. ✅ **Errors** (`pywire.errors`). The exception hierarchy + `ErrorInfo`
    + the `pywire_to_py_err` boundary helper. Shipped — every future
    binding calls `pywire_to_py_err` from its `PgWireResult` shim.
-2. **Messages: backend & frontend codecs** (`pywire.messages.*`). Pure
-   functions: `encode(msg) -> bytes`, `decode(bytes) -> msg`. Property
-   tests with hypothesis for round-trip symmetry.
+2. 🟡 **Messages: backend & frontend codecs** (`pywire.messages`).
+   Foundational variants shipped: `Startup`, `Query`, `Terminate`
+   (frontend); `ReadyForQuery`, `CommandComplete`, `RowDescription`,
+   `DataRow`, `ErrorResponse` (backend). Per-class `encode()`/`decode()`
+   with hypothesis round-trip property tests. Extended-query / COPY /
+   handshake-extras messages remain.
 3. **Shared types** (`pywire.messages.types`). `DataRow`,
    `FieldDescription`, `Tag`, `Oid`, etc. Trivial dataclass-shaped
    wrappers.
