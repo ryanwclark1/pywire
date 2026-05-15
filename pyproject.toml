@@ -6,7 +6,7 @@ build-backend = "maturin"
 name = "pywire"
 version = "0.40.0"
 description = "Python bindings for the Rust pgwire library"
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 
 [project.optional-dependencies]
 dev = [
@@ -46,14 +46,14 @@ fail_under = 100
 
 [tool.ruff]
 line-length = 100
-target-version = "py39"
+target-version = "py311"
 extend-exclude = ["target"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 
 [tool.mypy]
-python_version = "3.9"
+python_version = "3.11"
 strict = true
 files = ["pywire", "tests", "scripts"]
 exclude = "target/"

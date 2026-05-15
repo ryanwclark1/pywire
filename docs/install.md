@@ -8,8 +8,12 @@ pywire ships pre-built wheels for the following targets:
 | macOS   | `x86_64` + `arm64` (universal2) | — |
 | Windows | `x86_64`                  | —          |
 
-Python `>=3.9` is supported. Wheels use the stable `abi3` interface, so a
-single wheel per platform covers every Python in the supported range.
+Python **`>=3.11`** is supported (3.11 / 3.12 / 3.13 / 3.14). Wheels use
+the stable `abi3` interface (`abi3-py311`), so a single wheel per platform
+covers every Python in the supported range. Older Python versions are
+not supported: 3.9 reached end-of-life in October 2025 and 3.10 follows
+in October 2026; pywire targets the asyncio.TaskGroup / Self / ExceptionGroup
+surface that landed in 3.11.
 
 ## From PyPI
 
@@ -26,7 +30,7 @@ pip install 'pywire~=0.40.0'
 
 ## From source
 
-You need a Rust toolchain (`stable`) and Python `>=3.9`:
+You need a Rust toolchain (`stable`) and Python `>=3.11`:
 
 ```bash
 git clone https://github.com/ryanwclark1/pywire

@@ -48,7 +48,7 @@ async def _await_with_data(reader: asyncio.StreamReader, timeout: float = 2.0) -
     while asyncio.get_event_loop().time() < deadline:
         try:
             chunk = await asyncio.wait_for(reader.read(4096), timeout=0.2)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             if buf:
                 return buf
             continue
@@ -61,7 +61,7 @@ async def _await_with_data(reader: asyncio.StreamReader, timeout: float = 2.0) -
             await asyncio.sleep(0.05)
             try:
                 buf += await asyncio.wait_for(reader.read(4096), timeout=0.05)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass
             return buf
     return buf
