@@ -64,3 +64,7 @@ disallow_untyped_decorators = false
 [[tool.mypy.overrides]]
 module = "hypothesis"
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "pytest"
+ignore_missing_imports = true

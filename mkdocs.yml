@@ -60,7 +60,9 @@ nav:
   - Install: install.md
   - Quickstart: quickstart.md
   - Wire protocol concepts: concepts.md
-  - API reference: api.md
+  - API reference:
+      - Overview: api.md
+      - Errors: api/errors.md
   - Versioning: versioning.md
   - Releasing: releasing.md
   - Contributing: contributing.md

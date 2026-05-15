@@ -114,9 +114,9 @@ will revisit once there is a binding-level benchmark to point at.
 
 Each item is one PR with tests and docs.
 
-1. **Errors** (`pywire.errors`). The exception hierarchy. No pgwire
-   surface; just types and conversion infrastructure. Cheap and unblocks
-   everything else.
+1. ✅ **Errors** (`pywire.errors`). The exception hierarchy + `ErrorInfo`
+   + the `pywire_to_py_err` boundary helper. Shipped — every future
+   binding calls `pywire_to_py_err` from its `PgWireResult` shim.
 2. **Messages: backend & frontend codecs** (`pywire.messages.*`). Pure
    functions: `encode(msg) -> bytes`, `decode(bytes) -> msg`. Property
    tests with hypothesis for round-trip symmetry.
