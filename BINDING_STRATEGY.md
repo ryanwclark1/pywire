@@ -147,7 +147,12 @@ Each item is one PR with tests and docs.
    `pywire.server` (PR I); the server will provide a default impl
    that forwards Execute to `SimpleQueryHandler.do_query` for
    handlers that don't need prepared statements.
-7. **COPY** (`pywire.copy`). The bulk-transfer protocol.
+7. 🟡 **COPY** (`pywire.copy`). `CopyHandler` async ABC and
+   `CopyInfo` dataclass shipped, covering both `COPY FROM STDIN`
+   (client → server, `start_copy_in` + `on_copy_data` +
+   `on_copy_done`) and `COPY TO STDOUT` (`start_copy_out` +
+   `next_copy_out_chunk`). Rust adapter and connection wiring land
+   with `pywire.server` (PR I).
 8. **Server** (`pywire.server`). The high-level
    `await pywire.serve(handler, "127.0.0.1:5432")` entry point.
 9. **Sync convenience** (`pywire.sync`). Optional layer wrapping the

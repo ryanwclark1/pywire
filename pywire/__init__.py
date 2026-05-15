@@ -5,7 +5,7 @@ the [`pgwire`](https://crates.io/crates/pgwire) Rust crate to Python. See
 the [docs](https://ryanwclark1.github.io/pywire/) for the user guide.
 """
 
-from pywire import auth, errors, messages, query
+from pywire import auth, copy, errors, messages, query
 from pywire._pywire import supported_protocol_range
 
-__all__ = ["auth", "errors", "messages", "query", "supported_protocol_range"]
+__all__ = ["auth", "copy", "errors", "messages", "query", "supported_protocol_range"]
