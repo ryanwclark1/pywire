@@ -161,8 +161,10 @@ Each item is one PR with tests and docs.
    `pyo3_async_runtimes::tokio::scope` so user coroutines can `await`
    Python primitives from inside the accept loop. Currently no auth,
    no extended query, no COPY, no TLS — these land in v0.40.1+.
-9. **Sync convenience** (`pywire.sync`). Optional layer wrapping the
-   async API for users who don't want asyncio.
+9. ✅ **Sync convenience** (`pywire.sync`). `serve_forever(handler,
+   addr)` runs `pywire.server.serve` inside `asyncio.run` and
+   suppresses `KeyboardInterrupt` / `CancelledError` for clean Ctrl-C
+   shutdown. Thin wrapper; intended for CLIs and one-off scripts.
 
 Items 1–3 are small and mechanical. 4–7 are the real work. 8 is glue.
 
