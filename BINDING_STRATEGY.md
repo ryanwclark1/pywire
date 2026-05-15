@@ -142,6 +142,16 @@ Each item is one PR with tests and docs.
 
 Items 1–3 are small and mechanical. 4–7 are the real work. 8 is glue.
 
+### Infrastructure status
+
+- ✅ **Async runtime bridge** (`src/runtime.rs`). pyo3-async-runtimes
+  configured with a multi-threaded tokio builder during module init.
+  Two hidden test pyfunctions (`_test_async_sleep`,
+  `_test_await_python_coro`, `_test_async_add`) exercise both
+  directions of the bridge. Real async bindings (auth/query/server)
+  call `pyo3_tokio::future_into_py` and `pyo3_tokio::into_future`
+  directly.
+
 ## Testing each binding
 
 Every binding PR ships:

@@ -12,6 +12,7 @@ requires-python = ">=3.9"
 dev = [
   "pytest",
   "pytest-cov",
+  "pytest-asyncio",
   "hypothesis",
   "ruff",
   "mypy",
@@ -27,6 +28,7 @@ include = [{ path = "pywire/py.typed", format = "wheel" }, { path = "pywire/_pyw
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--cov=pywire --cov-report=term-missing --cov-report=xml:python-cov.xml"
+asyncio_mode = "auto"
 
 [tool.coverage.run]
 source = ["pywire"]
