@@ -33,7 +33,7 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: Install python deps
-        run: pip install ruff mypy maturin pytest pytest-cov hypothesis
+        run: pip install ruff mypy maturin pytest pytest-cov pytest-asyncio hypothesis
       - name: cargo fmt
         run: cargo fmt --all -- --check
       - name: cargo clippy

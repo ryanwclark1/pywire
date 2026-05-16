@@ -84,13 +84,19 @@ jobs:
           cache: pip
 
       - name: Install build and test deps
-        run: pip install maturin pytest pytest-cov hypothesis
+        run: pip install maturin pytest pytest-cov pytest-asyncio hypothesis
 
-      # The coverage cell drives cargo test + pytest itself; everything
-      # else runs the standard build+test path.
+      # The coverage cell drives cargo test + pytest itself (via
+      # scripts/coverage.sh, which does its own `pip install -e .`
+      # with instrumentation). Every other cell just installs the
+      # package in editable mode (which goes through maturin as the
+      # PEP 517 build backend) and runs pytest. We deliberately use
+      # `pip install -e .` rather than `maturin develop` because the
+      # latter rejects the GitHub-hosted runner's Python as "not in
+      # a virtualenv".
       - name: Build and install the extension
         if: matrix.os != 'ubuntu-latest' || matrix.python != '3.12'
-        run: maturin develop --release
+        run: pip install -e .
 
       - name: Run pytest
         if: matrix.os != 'ubuntu-latest' || matrix.python != '3.12'

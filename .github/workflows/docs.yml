@@ -38,8 +38,11 @@ jobs:
           pip install maturin
           pip install -r docs/requirements.txt
 
+      # `maturin develop` rejects the GitHub-hosted runner's Python as
+      # "not in a virtualenv", so build via pip (which uses maturin as
+      # the PEP 517 build backend).
       - name: Build pywire extension
-        run: maturin develop --release
+        run: pip install -e .
 
       - name: Build site
         run: mkdocs build
