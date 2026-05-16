@@ -28,7 +28,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 use pyo3_async_runtimes::tokio as pyo3_tokio;
 
-use crate::errors::pywire_to_py_err;
+use crate::errors::{py_err_to_pywire, pywire_to_py_err};
 
 // ---------- LoginInfo --------------------------------------------------
 
@@ -178,11 +178,10 @@ impl PgAuthSource for PyAuthSource {
     }
 }
 
-/// Translate a `PyErr` back into a `PgWireError`. We funnel everything
-/// into `PgWireError::ApiError` because anything raised inside Python
-/// auth code is, by definition, a user-supplied error.
+/// Local wrapper around `py_err_to_pywire` that acquires the GIL.
+/// Keeps the call sites in this module tidy.
 fn py_err_to_pgwire(err: PyErr) -> PgWireError {
-    PgWireError::ApiError(Box::new(std::io::Error::other(err.to_string())))
+    Python::attach(|py| py_err_to_pywire(py, err))
 }
 
 // ---------- test helper exposed to pytest -----------------------------

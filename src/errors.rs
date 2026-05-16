@@ -327,6 +327,73 @@ pub fn pywire_to_py_err(err: PgWireError) -> PyErr {
     }
 }
 
+/// Translate a `PyErr` back to the closest matching `PgWireError`.
+///
+/// Mirror of [`pywire_to_py_err`]: lets a handler raise
+/// `pywire.errors.QueryCanceled` (or any other pywire exception class)
+/// and have it land on the wire as the corresponding pgwire variant
+/// with the right SQLSTATE code, instead of being flattened into the
+/// generic `ApiError` (`XX000`) catch-all.
+///
+/// For variants that carry typed payloads we can't reconstruct from
+/// Python (e.g. `UnsupportedProtocolVersion(u16, u16)`), we keep the
+/// caller's message but route through `ApiError` rather than fabricate
+/// numeric data — losing the SQLSTATE is preferable to lying about
+/// protocol versions. The unit and string-carrying variants — which
+/// are the common case for user-raised exceptions — round-trip
+/// faithfully.
+pub fn py_err_to_pywire(py: Python<'_>, err: PyErr) -> PgWireError {
+    let name = err
+        .get_type(py)
+        .qualname()
+        .map(|s| s.to_string())
+        .unwrap_or_default();
+    let msg = err.to_string();
+    // err.to_string() formats as "ClassName: payload"; strip the prefix
+    // so payload-carrying variants get just the user's message.
+    let payload = msg
+        .strip_prefix(&format!("{name}: "))
+        .map(str::to_owned)
+        .unwrap_or_else(|| msg.clone());
+
+    match name.as_str() {
+        // Unit variants — perfect round-trip.
+        "InvalidCancelRequest" => PgWireError::InvalidCancelRequest,
+        "InvalidSecretKey" => PgWireError::InvalidSecretKey,
+        "InvalidSSLRequestMessage" => PgWireError::InvalidSSLRequestMessage,
+        "InvalidGssEncRequestMessage" => PgWireError::InvalidGssEncRequestMessage,
+        "InvalidStartupMessage" => PgWireError::InvalidStartupMessage,
+        "FailedToCoercePasswordMessage" => PgWireError::FailedToCoercePasswordMessage,
+        "InvalidSASLState" => PgWireError::InvalidSASLState,
+        "UnsupportedCertificateSignatureAlgorithm" => {
+            PgWireError::UnsupportedCertificateSignatureAlgorithm
+        }
+        "UserNameRequired" => PgWireError::UserNameRequired,
+        "NotReadyForQuery" => PgWireError::NotReadyForQuery,
+        "QueryCanceled" => PgWireError::QueryCanceled,
+        "PortalNotStarted" => PgWireError::PortalNotStarted,
+
+        // Single-String variants — preserve the payload.
+        "UnsupportedSASLAuthMethod" => PgWireError::UnsupportedSASLAuthMethod(payload),
+        "PortalNotFound" => PgWireError::PortalNotFound(payload),
+        "StatementNotFound" => PgWireError::StatementNotFound(payload),
+        "InvalidRustTypeForParameter" => PgWireError::InvalidRustTypeForParameter(payload),
+        "InvalidScramMessage" => PgWireError::InvalidScramMessage(payload),
+        "InvalidPassword" => PgWireError::InvalidPassword(payload),
+        "InvalidOptionValue" => PgWireError::InvalidOptionValue(payload),
+        "InvalidOauthMessage" => PgWireError::InvalidOauthMessage(payload),
+        "OAuthAuthenticationFailed" => PgWireError::OAuthAuthenticationFailed(payload),
+        "OAuthValidationError" => PgWireError::OAuthValidationError(payload),
+        "OauthAuthzIdError" => PgWireError::OauthAuthzIdError(payload),
+
+        // Variants that carry numeric / boxed-dyn-Error payloads we
+        // can't synthesize from a Python exception (also the catch-all
+        // for non-pywire exceptions). Route through ApiError; `msg`
+        // already includes the class name prefix from `err.to_string`.
+        _ => PgWireError::ApiError(Box::new(std::io::Error::other(msg))),
+    }
+}
+
 // ---------- test helper ---------------------------------------------------
 
 /// Hidden test helper. Maps a variant name string to a `PgWireError`,
@@ -387,6 +454,50 @@ fn _test_raise_for(variant: &str) -> PyResult<()> {
     Err(pywire_to_py_err(err))
 }
 
+/// Hidden test helper. Accepts a pywire exception INSTANCE (created on
+/// the Python side, e.g. `errors.QueryCanceled("cancel")`), runs it
+/// through `py_err_to_pywire`, and returns a short tag string naming
+/// the resulting `PgWireError` variant so pytest can assert on it
+/// without exposing the full enum to Python.
+#[pyfunction]
+fn _test_py_err_to_pywire_tag(py: Python<'_>, exc: Bound<'_, PyAny>) -> PyResult<String> {
+    let py_err = PyErr::from_value(exc);
+    let pg = py_err_to_pywire(py, py_err);
+    // Only emit tags for variants `py_err_to_pywire` can actually
+    // produce. Everything else falls through to "ApiError" — the
+    // boundary helper's catch-all bucket. This keeps the tag table
+    // a 1:1 mirror of what the binding round-trips faithfully.
+    let tag = match pg {
+        PgWireError::InvalidCancelRequest => "InvalidCancelRequest",
+        PgWireError::InvalidSecretKey => "InvalidSecretKey",
+        PgWireError::InvalidSSLRequestMessage => "InvalidSSLRequestMessage",
+        PgWireError::InvalidGssEncRequestMessage => "InvalidGssEncRequestMessage",
+        PgWireError::InvalidStartupMessage => "InvalidStartupMessage",
+        PgWireError::FailedToCoercePasswordMessage => "FailedToCoercePasswordMessage",
+        PgWireError::InvalidSASLState => "InvalidSASLState",
+        PgWireError::UnsupportedCertificateSignatureAlgorithm => {
+            "UnsupportedCertificateSignatureAlgorithm"
+        }
+        PgWireError::UserNameRequired => "UserNameRequired",
+        PgWireError::NotReadyForQuery => "NotReadyForQuery",
+        PgWireError::QueryCanceled => "QueryCanceled",
+        PgWireError::PortalNotStarted => "PortalNotStarted",
+        PgWireError::UnsupportedSASLAuthMethod(_) => "UnsupportedSASLAuthMethod",
+        PgWireError::PortalNotFound(_) => "PortalNotFound",
+        PgWireError::StatementNotFound(_) => "StatementNotFound",
+        PgWireError::InvalidRustTypeForParameter(_) => "InvalidRustTypeForParameter",
+        PgWireError::InvalidScramMessage(_) => "InvalidScramMessage",
+        PgWireError::InvalidPassword(_) => "InvalidPassword",
+        PgWireError::InvalidOptionValue(_) => "InvalidOptionValue",
+        PgWireError::InvalidOauthMessage(_) => "InvalidOauthMessage",
+        PgWireError::OAuthAuthenticationFailed(_) => "OAuthAuthenticationFailed",
+        PgWireError::OAuthValidationError(_) => "OAuthValidationError",
+        PgWireError::OauthAuthzIdError(_) => "OauthAuthzIdError",
+        _ => "ApiError",
+    };
+    Ok(tag.to_owned())
+}
+
 // ---------- module registration ------------------------------------------
 
 /// Register `pywire.errors` as a submodule of the parent `_pywire` module.
@@ -439,6 +550,7 @@ pub fn register(parent: &Bound<'_, PyModule>) -> PyResult<()> {
 
     m.add_class::<PyErrorInfo>()?;
     m.add_function(wrap_pyfunction!(_test_raise_for, &m)?)?;
+    m.add_function(wrap_pyfunction!(_test_py_err_to_pywire_tag, &m)?)?;
 
     parent.add_submodule(&m)?;
     // So that `from pywire._pywire.errors import X` works inside Python.

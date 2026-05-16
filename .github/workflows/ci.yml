@@ -78,6 +78,13 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      # cargo-llvm-cov is invoked by scripts/coverage.sh on the ubuntu/3.12
+      # cell. Installed only on Linux because the other cells don't run
+      # the coverage gate.
+      - name: Install cargo-llvm-cov
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
+        uses: taiki-e/install-action@cargo-llvm-cov
+
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
@@ -112,7 +119,10 @@ jobs:
         with:
           files: python-cov.xml
           flags: python
-          fail_ci_if_error: true
+          # Codecov upload is best-effort — the binding 100%-coverage
+          # gate is enforced inside scripts/coverage.sh, so failing CI
+          # on a Codecov outage or missing token is unnecessary.
+          fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
 
       - name: Upload Rust coverage to Codecov
@@ -121,5 +131,8 @@ jobs:
         with:
           files: rust-cov.lcov
           flags: rust
-          fail_ci_if_error: true
+          # Codecov upload is best-effort — the binding 100%-coverage
+          # gate is enforced inside scripts/coverage.sh, so failing CI
+          # on a Codecov outage or missing token is unnecessary.
+          fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}

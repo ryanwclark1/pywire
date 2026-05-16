@@ -48,6 +48,29 @@ def test_field_info_with_int4_oid():
     assert "23" in repr(f)
 
 
+async def test_custom_type_oid_round_trips_through_row_description():
+    """Custom / extension OIDs (unknown to postgres-types' static table)
+    must survive the Python -> Rust -> wire conversion without being
+    rewritten to Type::UNKNOWN (705)."""
+    custom_oid = 16384  # well above the built-in OID range
+
+    class Custom(query.SimpleQueryHandler):
+        async def do_query(self, q: str) -> list[query.Response]:
+            return [
+                query.Response.query(
+                    fields=[query.FieldInfo("v", type_id=custom_oid)],
+                    rows=[[b"x"]],
+                ),
+            ]
+
+    # Drive the adapter and let the script-style summary verify the
+    # conversion completed without error. The real check is at the
+    # Rust unit-test level (custom_oid_preserved_in_field_info).
+    out = await _test_drive_handler(Custom(), "SELECT 1")
+    kind, summary = out[0]
+    assert kind == "query"
+
+
 def test_field_info_equality():
     assert query.FieldInfo("a") == query.FieldInfo("a")
     assert query.FieldInfo("a") != query.FieldInfo("b")

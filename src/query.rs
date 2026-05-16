@@ -29,6 +29,7 @@ use pgwire::api::results::{FieldFormat, FieldInfo as PgFieldInfo, QueryResponse,
 use pgwire::api::Type;
 use pgwire::error::PgWireError;
 use pgwire::messages::data::DataRow;
+use postgres_types::Kind;
 use pyo3::prelude::*;
 use pyo3::types::PyType;
 use pyo3_async_runtimes::tokio as pyo3_tokio;
@@ -69,7 +70,22 @@ impl PyFieldInfo {
 
 impl From<PyFieldInfo> for PgFieldInfo {
     fn from(f: PyFieldInfo) -> Self {
-        let datatype = Type::from_oid(f.type_id).unwrap_or(Type::UNKNOWN);
+        // `Type::from_oid` only resolves OIDs from postgres-types' static
+        // table of built-in types. User-defined / extension types
+        // (custom enums, domains, hstore, vector, ...) return None.
+        // Falling back to `Type::UNKNOWN` (OID 705) would silently
+        // rewrite the wire-level OID and break client decoders, so we
+        // construct a placeholder `Type` carrying the caller's OID
+        // verbatim. RowDescription's wire encoding only uses `Type::oid()`
+        // (per pgwire `src/messages/data.rs`), so this is sufficient.
+        let datatype = Type::from_oid(f.type_id).unwrap_or_else(|| {
+            Type::new(
+                format!("oid{}", f.type_id),
+                f.type_id,
+                Kind::Simple,
+                "pg_catalog".to_owned(),
+            )
+        });
         PgFieldInfo::new(f.name, None, None, datatype, FieldFormat::Text)
     }
 }
@@ -368,6 +384,25 @@ mod tests {
         let pg: PgFieldInfo = f.into();
         assert_eq!(pg.name(), "id");
         assert_eq!(pg.datatype().oid(), 23);
+    }
+
+    #[test]
+    fn custom_oid_preserved_in_field_info() {
+        // OIDs above 16384 are user-defined / extension types. They
+        // aren't in `Type::from_oid`'s static table; the binding must
+        // still carry them through verbatim so the client sees the
+        // right column type.
+        const CUSTOM_OID: u32 = 99_999;
+        let f = PyFieldInfo {
+            name: "custom".into(),
+            type_id: CUSTOM_OID,
+        };
+        let pg: PgFieldInfo = f.into();
+        assert_eq!(
+            pg.datatype().oid(),
+            CUSTOM_OID,
+            "custom OID must be preserved, not rewritten to Type::UNKNOWN (705)"
+        );
     }
 
     #[test]

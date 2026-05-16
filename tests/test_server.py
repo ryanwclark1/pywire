@@ -122,7 +122,10 @@ async def test_simple_query_round_trip_over_tcp():
 
 
 async def test_handler_error_response_reaches_client():
-    """A handler-raised pywire.errors.Error becomes an ErrorResponse on the wire."""
+    """A handler-raised `pywire.errors.QueryCanceled` becomes an
+    ErrorResponse on the wire with the right `57014` SQLSTATE — not the
+    generic `XX000` we'd see if every PyErr were flattened to
+    `PgWireError::ApiError`."""
 
     class Failing(query.SimpleQueryHandler):
         async def do_query(self, q: str) -> list[query.Response]:
@@ -137,10 +140,15 @@ async def test_handler_error_response_reaches_client():
             writer.write(messages.Query("SELECT 1").encode())
             await writer.drain()
             payload = await _await_with_data(reader)
-            # PostgreSQL ErrorResponse type tag is 'E'. The error message
-            # should mention our cancel string somewhere.
+            # PostgreSQL ErrorResponse type tag is 'E'.
             assert b"E" in payload[:1] or b"E" in payload
             assert b"cancel" in payload.lower()
+            # ErrorResponse fields are tag-byte + cstring pairs;
+            # SQLSTATE rides on field tag 'C'. Look for the
+            # QueryCanceled SQLSTATE (57014) verbatim.
+            assert b"57014" in payload, (
+                f"expected QueryCanceled SQLSTATE 57014 in wire payload (got: {payload!r})"
+            )
         finally:
             writer.close()
             with contextlib.suppress(Exception):

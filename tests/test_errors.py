@@ -18,7 +18,10 @@ These tests are also responsible for the 100% Rust coverage on the
 from __future__ import annotations
 
 import pytest
-from pywire._pywire.errors import _test_raise_for  # type: ignore[import-not-found]
+from pywire._pywire.errors import (  # type: ignore[import-not-found]
+    _test_py_err_to_pywire_tag,
+    _test_raise_for,
+)
 
 import pywire
 from pywire import errors
@@ -163,6 +166,64 @@ def test_pgwire_error_maps_to_python_class(variant, expected_cls):
 def test_unknown_variant_raises_value_error():
     with pytest.raises(ValueError):
         _test_raise_for("DefinitelyNotARealVariant")
+
+
+# ---- (2b) Python -> Rust boundary (py_err_to_pywire) -----------------
+
+# Each entry: (pywire.errors class name, expected PgWireError variant tag).
+# This is the round trip a server uses when a SimpleQueryHandler raises
+# a pywire exception and we need to preserve its SQLSTATE on the wire.
+PY_TO_PG_VARIANTS = [
+    # Unit variants — perfect round-trip.
+    ("InvalidCancelRequest", "InvalidCancelRequest"),
+    ("InvalidSecretKey", "InvalidSecretKey"),
+    ("InvalidSSLRequestMessage", "InvalidSSLRequestMessage"),
+    ("InvalidGssEncRequestMessage", "InvalidGssEncRequestMessage"),
+    ("InvalidStartupMessage", "InvalidStartupMessage"),
+    ("FailedToCoercePasswordMessage", "FailedToCoercePasswordMessage"),
+    ("InvalidSASLState", "InvalidSASLState"),
+    ("UnsupportedCertificateSignatureAlgorithm", "UnsupportedCertificateSignatureAlgorithm"),
+    ("UserNameRequired", "UserNameRequired"),
+    ("NotReadyForQuery", "NotReadyForQuery"),
+    ("QueryCanceled", "QueryCanceled"),
+    ("PortalNotStarted", "PortalNotStarted"),
+    # String-carrying variants.
+    ("UnsupportedSASLAuthMethod", "UnsupportedSASLAuthMethod"),
+    ("PortalNotFound", "PortalNotFound"),
+    ("StatementNotFound", "StatementNotFound"),
+    ("InvalidRustTypeForParameter", "InvalidRustTypeForParameter"),
+    ("InvalidScramMessage", "InvalidScramMessage"),
+    ("InvalidPassword", "InvalidPassword"),
+    ("InvalidOptionValue", "InvalidOptionValue"),
+    ("InvalidOauthMessage", "InvalidOauthMessage"),
+    ("OAuthAuthenticationFailed", "OAuthAuthenticationFailed"),
+    ("OAuthValidationError", "OAuthValidationError"),
+    ("OauthAuthzIdError", "OauthAuthzIdError"),
+    # Variants carrying typed payloads we can't reconstruct from a
+    # Python exception — fall back to ApiError but keep the message.
+    ("UnsupportedProtocolVersion", "ApiError"),
+    ("InvalidMessageType", "ApiError"),
+    ("MessageTooLarge", "ApiError"),
+    ("InvalidTargetType", "ApiError"),
+    ("InvalidTransactionStatus", "ApiError"),
+    ("InvalidAuthenticationMessageCode", "ApiError"),
+    ("ParameterIndexOutOfBound", "ApiError"),
+    ("FailedToParseParameter", "ApiError"),
+    # Catch-alls.
+    ("ApiError", "ApiError"),
+    ("UserError", "ApiError"),
+]
+
+
+@pytest.mark.parametrize("py_class,expected_tag", PY_TO_PG_VARIANTS)
+def test_py_err_round_trips_to_pgwire_variant(py_class, expected_tag):
+    cls = getattr(errors, py_class)
+    exc = cls("test message")
+    assert _test_py_err_to_pywire_tag(exc) == expected_tag
+
+
+def test_non_pywire_exception_falls_back_to_api_error():
+    assert _test_py_err_to_pywire_tag(RuntimeError("from outside pywire")) == "ApiError"
 
 
 # ---- (3) ErrorInfo ------------------------------------------------------

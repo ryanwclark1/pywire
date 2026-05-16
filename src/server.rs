@@ -38,6 +38,7 @@ use pyo3::prelude::*;
 use pyo3_async_runtimes::tokio as pyo3_tokio;
 use tokio::net::TcpListener;
 
+use crate::errors::py_err_to_pywire;
 use crate::query::PyQueryHandler;
 
 // ---------- SimpleQueryHandler adapter --------------------------------
@@ -59,9 +60,15 @@ impl PgSimpleQueryHandler for PyServerSimpleQueryHandler {
             + Send
             + Sync,
     {
-        let py_responses = self.inner.do_query(query).await.map_err(|err| {
-            pgwire::error::PgWireError::ApiError(Box::new(std::io::Error::other(err.to_string())))
-        })?;
+        let py_responses = self
+            .inner
+            .do_query(query)
+            .await
+            // Preserve the pywire exception's class identity (and
+            // therefore its SQLSTATE) when mapping back to pgwire's
+            // error enum, instead of flattening every Python exception
+            // into ApiError / XX000.
+            .map_err(|err| Python::attach(|py| py_err_to_pywire(py, err)))?;
         Ok(py_responses.into_iter().map(|r| r.into_pg()).collect())
     }
 }
