@@ -98,8 +98,16 @@ struct PyStartupHandler {
 
 enum PyStartupInner {
     Noop(NoopHandler),
+    /// Boxed because pgwire's handler is ~256 bytes and the `Noop`
+    /// variant is zero-sized — clippy's `large_enum_variant` triggers
+    /// without the indirection.
     Cleartext(
-        CleartextPasswordAuthStartupHandler<PyAuthSourceWrapper, DefaultServerParameterProvider>,
+        Box<
+            CleartextPasswordAuthStartupHandler<
+                PyAuthSourceWrapper,
+                DefaultServerParameterProvider,
+            >,
+        >,
     ),
 }
 
@@ -173,10 +181,10 @@ fn serve<'py>(
         None => PyStartupInner::Noop(NoopHandler),
         Some(auth_obj) => {
             let py_auth = Arc::new(PyAuthSource::new(auth_obj.unbind()));
-            PyStartupInner::Cleartext(CleartextPasswordAuthStartupHandler::new(
+            PyStartupInner::Cleartext(Box::new(CleartextPasswordAuthStartupHandler::new(
                 PyAuthSourceWrapper(py_auth),
                 DefaultServerParameterProvider::default(),
-            ))
+            )))
         }
     };
 
