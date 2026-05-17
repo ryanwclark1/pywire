@@ -2,16 +2,17 @@
 
 We don't pull in a full PostgreSQL client (psycopg / asyncpg) because
 the wheel matrix doesn't carry them and our wire surface is still
-narrow (no auth, no extended query). Instead we:
+narrow. Instead we:
 
 1. Start the server on an ephemeral port.
-2. Open a raw TCP connection, hand-construct a Startup + Query message
-   pair using `pywire.messages`, and verify the server's response
-   bytes parse cleanly back into the message types we expect.
+2. Open a raw TCP connection, hand-construct Startup / Query / Password
+   frames, and verify the server's response bytes parse cleanly back
+   into the message types we expect.
 
 This is enough to exercise the listen loop, the startup handshake,
-the simple-query path, and the response framing — i.e. every piece of
-the server we ship today.
+the simple-query path, the response framing, and (now) the
+cleartext-password auth flow — i.e. every piece of the server we ship
+today.
 """
 
 from __future__ import annotations
@@ -22,12 +23,22 @@ import contextlib
 import pytest
 
 import pywire
-from pywire import errors, messages, query, server
+from pywire import auth, errors, messages, query, server
 from pywire._pywire import _test_bind_ephemeral  # type: ignore[attr-defined]
 
 
 def test_server_is_exposed_under_pywire():
     assert pywire.server is server
+
+
+def _password_message(password: bytes) -> bytes:
+    """Hand-construct the wire bytes for a PostgreSQL PasswordMessage.
+
+    Format: type byte 'p' + i32 length (incl. itself) + cstring(password).
+    """
+    body = password + b"\x00"
+    length = 4 + len(body)
+    return b"p" + length.to_bytes(4, "big") + body
 
 
 async def _read_at_least(reader: asyncio.StreamReader, n: int) -> bytes:
@@ -68,11 +79,15 @@ async def _await_with_data(reader: asyncio.StreamReader, timeout: float = 2.0) -
 
 
 @contextlib.asynccontextmanager
-async def _running_server(handler: query.SimpleQueryHandler):  # type: ignore[no-untyped-def]
+async def _running_server(  # type: ignore[no-untyped-def]
+    handler: query.SimpleQueryHandler,
+    *,
+    auth_source: auth.AuthSource | None = None,
+):
     """Run `server.serve` on a free port, yield the port, cancel on exit."""
     port = await _test_bind_ephemeral()
     addr = f"127.0.0.1:{port}"
-    task = asyncio.create_task(server.serve(handler, addr))
+    task = asyncio.create_task(server.serve(handler, addr, auth=auth_source))
     # Give the listener a moment to bind.
     await asyncio.sleep(0.05)
     try:
@@ -178,3 +193,117 @@ async def test_serve_surfaces_bind_failure_as_os_error():
 class _DummyHandler(query.SimpleQueryHandler):
     async def do_query(self, q: str) -> list[query.Response]:
         return []
+
+
+# ---- cleartext authentication ---------------------------------------
+
+
+class _StaticAuth(auth.AuthSource):
+    """Test fixture: in-memory username -> password map.
+
+    Raises `pywire.errors.InvalidPassword` when the user is unknown,
+    which routes through `py_err_to_pywire` -> `PgWireError::InvalidPassword`
+    -> SQLSTATE 28P01 on the wire.
+    """
+
+    def __init__(self, users: dict[str, bytes]) -> None:
+        self.users = users
+
+    async def get_password(self, login: auth.LoginInfo) -> auth.Password:
+        try:
+            return auth.Password(self.users[login.user or ""])
+        except KeyError:
+            raise errors.InvalidPassword(login.user or "") from None
+
+
+async def test_cleartext_auth_accepts_correct_password():
+    """Full happy-path: Startup -> AuthenticationCleartextPassword ->
+    PasswordMessage -> AuthenticationOk + ReadyForQuery -> Query -> Row."""
+
+    class Greeting(query.SimpleQueryHandler):
+        async def do_query(self, q: str) -> list[query.Response]:
+            return [
+                query.Response.query(
+                    fields=[query.FieldInfo("greeting", type_id=25)],
+                    rows=[[b"hi"]],
+                ),
+            ]
+
+    auth_source = _StaticAuth({"alice": b"hunter2"})
+    async with _running_server(Greeting(), auth_source=auth_source) as port:
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        try:
+            # Startup.
+            writer.write(messages.Startup(parameters={"user": "alice"}).encode())
+            await writer.drain()
+            # Server should reply with AuthenticationCleartextPassword ('R' + length
+            # + i32(3)). It does NOT send ReadyForQuery yet.
+            auth_request = await _await_with_data(reader, timeout=1.0)
+            assert auth_request[0:1] == b"R", (
+                f"expected AuthenticationCleartextPassword, got: {auth_request!r}"
+            )
+            # Body of 'R' is i32(method); 3 means cleartext.
+            assert auth_request[5:9] == b"\x00\x00\x00\x03"
+            # No ReadyForQuery yet.
+            assert b"Z" not in auth_request
+
+            # Send PasswordMessage with the right password.
+            writer.write(_password_message(b"hunter2"))
+            await writer.drain()
+            handshake = await _await_with_data(reader)
+            assert b"Z" in handshake, f"expected ReadyForQuery after auth ok, got: {handshake!r}"
+
+            # Now run a query.
+            writer.write(messages.Query("SELECT 'hi'").encode())
+            await writer.drain()
+            response = await _await_with_data(reader)
+            assert b"greeting" in response
+            assert b"hi" in response
+            assert b"Z" in response
+        finally:
+            writer.close()
+            with contextlib.suppress(Exception):
+                await writer.wait_closed()
+
+
+async def test_cleartext_auth_rejects_wrong_password():
+    """A wrong password should produce an ErrorResponse carrying
+    SQLSTATE 28P01 (invalid_password). The server then closes the
+    connection — i.e. we don't reach ReadyForQuery."""
+    auth_source = _StaticAuth({"alice": b"hunter2"})
+    async with _running_server(_DummyHandler(), auth_source=auth_source) as port:
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        try:
+            writer.write(messages.Startup(parameters={"user": "alice"}).encode())
+            await writer.drain()
+            await _await_with_data(reader, timeout=1.0)  # auth request
+            writer.write(_password_message(b"WRONG"))
+            await writer.drain()
+            payload = await _await_with_data(reader, timeout=1.0)
+            assert b"E" in payload[:1] or b"E" in payload
+            assert b"28P01" in payload, f"expected InvalidPassword SQLSTATE 28P01 in {payload!r}"
+        finally:
+            writer.close()
+            with contextlib.suppress(Exception):
+                await writer.wait_closed()
+
+
+async def test_cleartext_auth_rejects_unknown_user():
+    """An unknown user should land as InvalidPassword (we raise it from
+    `_StaticAuth.get_password` on KeyError) — SQLSTATE 28P01."""
+    auth_source = _StaticAuth({"alice": b"hunter2"})
+    async with _running_server(_DummyHandler(), auth_source=auth_source) as port:
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        try:
+            writer.write(messages.Startup(parameters={"user": "bob"}).encode())
+            await writer.drain()
+            await _await_with_data(reader, timeout=1.0)
+            writer.write(_password_message(b"anything"))
+            await writer.drain()
+            payload = await _await_with_data(reader, timeout=1.0)
+            assert b"E" in payload[:1] or b"E" in payload
+            assert b"28P01" in payload
+        finally:
+            writer.close()
+            with contextlib.suppress(Exception):
+                await writer.wait_closed()

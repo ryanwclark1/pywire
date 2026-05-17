@@ -126,13 +126,14 @@ Each item is one PR with tests and docs.
 3. **Shared types** (`pywire.messages.types`). `DataRow`,
    `FieldDescription`, `Tag`, `Oid`, etc. Trivial dataclass-shaped
    wrappers.
-4. 🟡 **Auth** (`pywire.auth`). User-facing surface shipped:
+4. 🟡 **Auth** (`pywire.auth` + `pywire.server`). User-facing surface:
    `LoginInfo`, `Password`, the `AuthSource` async ABC, plus the
-   internal Rust adapter (`PyAuthSource`) that wires a Python
-   subclass into pgwire's `AuthSource` trait. The startup handlers
-   (`CleartextPasswordHandler`, `Md5PasswordHandler`,
-   `SaslScramHandler`) are part of `pywire.server` (PR I) since
-   pgwire's handlers are generic over the connection type.
+   internal Rust adapter (`PyAuthSource`). **Cleartext auth shipped**
+   via `pywire.server.serve(..., auth=AuthSource())` — the server
+   now dispatches between pgwire's `NoopHandler` (no auth) and
+   `CleartextPasswordAuthStartupHandler` driven by a Python
+   `AuthSource`. MD5 + SCRAM-SHA-256 land in v0.40.2; they need
+   pgwire's `_ring` / `_aws-lc-rs` feature.
 5. 🟡 **Simple query** (`pywire.query`). User-facing surface shipped:
    `SimpleQueryHandler` async ABC, `Response` tagged union (empty /
    execution / query / error), `FieldInfo` column metadata, plus the

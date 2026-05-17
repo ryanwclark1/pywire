@@ -5,7 +5,7 @@ point: bind a TCP listener, accept connections, and dispatch each one
 through pgwire's connection-state machine. Each connection gets its own
 async task; queries flow through your `SimpleQueryHandler`.
 
-## Quick example
+## Quick example — open (no auth)
 
 ```python
 import asyncio
@@ -30,6 +30,40 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
+## With cleartext authentication
+
+Subclass [`AuthSource`](auth.md) and pass it via `auth=`:
+
+```python
+from pywire.auth import AuthSource, LoginInfo, Password
+from pywire.errors import InvalidPassword
+
+
+class StaticUsers(AuthSource):
+    def __init__(self, users: dict[str, bytes]) -> None:
+        self.users = users
+
+    async def get_password(self, login: LoginInfo) -> Password:
+        try:
+            return Password(self.users[login.user or ""])
+        except KeyError:
+            raise InvalidPassword(login.user or "") from None
+
+
+async def main() -> None:
+    await pywire.server.serve(
+        Hello(),
+        "127.0.0.1:5433",
+        auth=StaticUsers({"alice": b"hunter2"}),
+    )
+```
+
+On connect, pywire sends `AuthenticationCleartextPassword`, awaits the
+client's `PasswordMessage`, and calls your `get_password` to look up
+the reference password. A mismatch surfaces as
+`pywire.errors.InvalidPassword` (SQLSTATE `28P01`). MD5 and SCRAM
+land in v0.40.2.
+
 To stop the server, cancel the task it lives in:
 
 ```python
@@ -46,8 +80,9 @@ This first iteration of the server is intentionally narrow.
 | ----------------- | --------------------------------------------------------------------------------------- |
 | TCP accept loop   | ✅ Multiple concurrent connections via tokio task per connection.                       |
 | Simple query (`'Q'`) | ✅ Routed to your `SimpleQueryHandler.do_query`.                                     |
-| Startup handshake | ✅ `NoopStartupHandler` (no authentication; every client is trusted).                   |
-| Authentication    | ⬜ Cleartext / MD5 / SCRAM startup handlers ship in v0.40.1.                            |
+| Startup handshake | ✅ With or without authentication, controlled by the `auth=...` argument.               |
+| Cleartext auth    | ✅ Pass an `AuthSource` subclass; pywire runs PostgreSQL's cleartext-password flow.     |
+| MD5 / SCRAM auth  | ⬜ Land in v0.40.2; SCRAM needs pgwire's `_ring` / `_aws-lc-rs` feature.                |
 | Extended query    | ⬜ `Parse`/`Bind`/`Describe`/`Execute` get a protocol error today. The Python ABC is in place (`pywire.query.ExtendedQueryHandler`); wiring lands in a follow-up. |
 | COPY              | ⬜ Same — protocol error today; `pywire.copy.CopyHandler` ABC is in place.              |
 | Cancel requests   | ⬜ pgwire's `NoopHandler` default; no cancel-token routing yet.                         |

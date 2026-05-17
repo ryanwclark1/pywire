@@ -1,7 +1,11 @@
-from typing import Any
-
+from pywire.auth import AuthSource
 from pywire.query import SimpleQueryHandler
 
 __all__: list[str]
 
-async def serve(simple_query: SimpleQueryHandler, addr: str) -> Any: ...
+async def serve(
+    simple_query: SimpleQueryHandler,
+    addr: str,
+    *,
+    auth: AuthSource | None = None,
+) -> None: ...
