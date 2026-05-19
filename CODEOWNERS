@@ -1,0 +1,4 @@
+# Anything in the repo defaults to the project maintainer. Add more rows
+# as the team grows; CODEOWNERS lines are last-match-wins.
+
+* @ryanwclark1

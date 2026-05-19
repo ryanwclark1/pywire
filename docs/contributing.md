@@ -86,6 +86,20 @@ Run `cargo deny check` locally before pushing. CI runs the same command.
 `deny.toml` at the repo root configures allowed licenses, advisory policy,
 and source registries.
 
+## Pre-commit hooks
+
+A `.pre-commit-config.yaml` at the repo root mirrors the CI lint job
+(`ruff`, `ruff format`, `cargo fmt`, `cargo clippy`, `mypy`, plus a
+few hygienic checks). Optional but recommended:
+
+```bash
+pip install pre-commit
+pre-commit install
+```
+
+`pre-commit` then runs on every commit. Run against the full tree with
+`pre-commit run --all-files`.
+
 ## Workflow files
 
 If you touch `.github/workflows/*.yml`, run

@@ -1,0 +1,67 @@
+name: Bug report
+description: Something that should work but doesn't
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug. **For security issues, please use
+        [private vulnerability reporting](https://github.com/ryanwclark1/pywire/security/advisories/new)
+        instead.**
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear and concise description of the bug.
+      placeholder: When I call `pywire.foo()`, I expected X but got Y.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: |
+        Minimal code that triggers the bug. Inline the Python snippet
+        (and any Rust snippet, if it's a binding-layer issue) here.
+      render: python
+    validations:
+      required: true
+
+  - type: input
+    id: pywire-version
+    attributes:
+      label: pywire version
+      description: Output of `python -c "import pywire; print(pywire.__version__)"` or the wheel filename.
+      placeholder: "0.40.0"
+    validations:
+      required: true
+
+  - type: input
+    id: python-version
+    attributes:
+      label: Python version
+      placeholder: "3.12.7"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      multiple: true
+      options:
+        - Linux (glibc)
+        - Linux (musl)
+        - macOS
+        - Windows
+        - Other (describe below)
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: Logs, stack traces, hypothesis seeds — anything that helps.
