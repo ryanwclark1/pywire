@@ -115,7 +115,7 @@ jobs:
 
       - name: Upload Python coverage to Codecov
         if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v6
         with:
           files: python-cov.xml
           flags: python
@@ -127,7 +127,7 @@ jobs:
 
       - name: Upload Rust coverage to Codecov
         if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v6
         with:
           files: rust-cov.lcov
           flags: rust
