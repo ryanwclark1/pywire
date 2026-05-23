@@ -1,0 +1,23 @@
+import abc
+from dataclasses import dataclass
+
+__all__: list[str]
+
+@dataclass(frozen=True)
+class CopyInfo:
+    direction: str
+    binary: bool
+    column_formats: list[int] = ...
+
+class CopyHandler(abc.ABC):
+    @abc.abstractmethod
+    async def start_copy_in(self, query: str) -> CopyInfo: ...
+    @abc.abstractmethod
+    async def on_copy_data(self, chunk: bytes) -> None: ...
+    @abc.abstractmethod
+    async def on_copy_done(self) -> str: ...
+    @abc.abstractmethod
+    async def start_copy_out(self, query: str) -> CopyInfo: ...
+    @abc.abstractmethod
+    async def next_copy_out_chunk(self) -> bytes: ...
+    async def on_copy_fail(self, message: str) -> None: ...

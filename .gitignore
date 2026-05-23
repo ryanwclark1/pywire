@@ -1,6 +1,15 @@
 /target/
 **/__pycache__/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+/python-cov.xml
+/rust-cov.lcov
+*.profraw
+*.profdata
+htmlcov/
+/site/
 
 /pywire/*.so
-/Cargo.lock

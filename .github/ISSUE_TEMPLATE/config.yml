@@ -1,0 +1,13 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/ryanwclark1/pywire/security/advisories/new
+    about: |
+      Use GitHub's private vulnerability reporting — do not file
+      security issues publicly. See SECURITY.md.
+  - name: pgwire (upstream Rust crate)
+    url: https://github.com/sunng87/pgwire/issues
+    about: |
+      If the bug or missing feature is in the wire-protocol layer
+      itself, please report it upstream. pywire only binds what
+      pgwire exposes.

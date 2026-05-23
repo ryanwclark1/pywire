@@ -1,0 +1,3 @@
+def supported_protocol_range() -> tuple[int, int]:
+    """Return the (earliest, latest) PostgreSQL protocol versions supported by pgwire."""
+    ...

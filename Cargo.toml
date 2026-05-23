@@ -1,6 +1,6 @@
 [package]
 name = "pywire"
-version = "0.1.0"
+version = "0.40.0"
 edition = "2021"
 
 [lib]
@@ -8,5 +8,11 @@ name = "pywire"
 crate-type = ["cdylib"]
 
 [dependencies]
-pgwire = { version = "0.40.0", default-features = false }
-pyo3 = { version = "0.22.6", features = ["abi3-py39"] }
+async-trait = "0.1"
+bytes = "1"
+futures = "0.3"
+pgwire = { version = "0.40.0", default-features = false, features = ["server-api"] }
+postgres-types = "0.2"
+pyo3 = { version = "0.28.3", features = ["abi3-py311"] }
+pyo3-async-runtimes = { version = "0.28", features = ["tokio-runtime"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }

@@ -1,0 +1,45 @@
+name: Feature request
+description: A capability pywire should support
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing: pywire mirrors the [`pgwire`](https://crates.io/crates/pgwire)
+        Rust crate one-for-one. If the feature is missing upstream, you
+        probably want to file at https://github.com/sunng87/pgwire
+        first. If pgwire has it and pywire hasn't bound it yet, that's
+        what this template is for.
+
+        See [BINDING_STRATEGY.md](../blob/main/BINDING_STRATEGY.md) for
+        the roadmap; the feature you want may already be queued.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What feature?
+      description: A clear description of the pgwire capability you want exposed in Python.
+    validations:
+      required: true
+
+  - type: textarea
+    id: why
+    attributes:
+      label: Why?
+      description: The use case. What are you trying to build?
+    validations:
+      required: true
+
+  - type: textarea
+    id: shape
+    attributes:
+      label: Proposed Python API
+      description: A sketch is enough — types, ABC shape, function names.
+      render: python
+
+  - type: input
+    id: pgwire-ref
+    attributes:
+      label: pgwire reference
+      description: Link to the upstream Rust type / function / docs if you have one.
+      placeholder: https://docs.rs/pgwire/0.40.0/pgwire/api/...

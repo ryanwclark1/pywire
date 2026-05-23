@@ -1,0 +1,138 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install python lint deps
+        run: pip install ruff mypy
+
+      - name: ruff check
+        run: ruff check .
+
+      - name: ruff format --check
+        run: ruff format --check .
+
+      - name: mypy
+        run: mypy
+
+      - name: actionlint
+        run: |
+          bash <(curl -sSf https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+          ./actionlint -color
+        shell: bash
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories licenses sources bans
+
+  test:
+    needs: [lint, audit]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.11", "3.12", "3.13", "3.14"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - uses: Swatinem/rust-cache@v2
+
+      # cargo-llvm-cov is invoked by scripts/coverage.sh on the ubuntu/3.12
+      # cell. Installed only on Linux because the other cells don't run
+      # the coverage gate.
+      - name: Install cargo-llvm-cov
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+
+      - name: Install build and test deps
+        run: pip install maturin pytest pytest-cov pytest-asyncio hypothesis
+
+      # The coverage cell drives cargo test + pytest itself (via
+      # scripts/coverage.sh, which does its own `pip install -e .`
+      # with instrumentation). Every other cell just installs the
+      # package in editable mode (which goes through maturin as the
+      # PEP 517 build backend) and runs pytest. We deliberately use
+      # `pip install -e .` rather than `maturin develop` because the
+      # latter rejects the GitHub-hosted runner's Python as "not in
+      # a virtualenv".
+      - name: Build and install the extension
+        if: matrix.os != 'ubuntu-latest' || matrix.python != '3.12'
+        run: pip install -e .
+
+      - name: Run pytest
+        if: matrix.os != 'ubuntu-latest' || matrix.python != '3.12'
+        run: pytest -q
+
+      - name: Run full coverage gate
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
+        run: bash scripts/coverage.sh
+
+      - name: Upload Python coverage to Codecov
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
+        uses: codecov/codecov-action@v5
+        with:
+          files: python-cov.xml
+          flags: python
+          # Codecov upload is best-effort — the binding 100%-coverage
+          # gate is enforced inside scripts/coverage.sh, so failing CI
+          # on a Codecov outage or missing token is unnecessary.
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+      - name: Upload Rust coverage to Codecov
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
+        uses: codecov/codecov-action@v5
+        with:
+          files: rust-cov.lcov
+          flags: rust
+          # Codecov upload is best-effort — the binding 100%-coverage
+          # gate is enforced inside scripts/coverage.sh, so failing CI
+          # on a Codecov outage or missing token is unnecessary.
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
