@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "pywire"
-version = "0.40.0"
+version = "0.41.0"
 description = "Python bindings for the Rust pgwire library"
 requires-python = ">=3.11"
 
