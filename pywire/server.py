@@ -52,11 +52,12 @@ client is then trusted.
 
 from __future__ import annotations
 
+import abc
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 from pywire._pywire import serve as _serve
-from pywire.auth import AuthSource
+from pywire.auth import AuthSource, LoginInfo
 from pywire.query import ExtendedQueryHandler, SimpleQueryHandler
 
 
@@ -69,12 +70,26 @@ class TLSConfig:
     require: bool = True
 
 
+class SessionFactory(abc.ABC):
+    """Create one Python handler/session object per authenticated connection.
+
+    The returned object takes precedence over the process-wide simple and
+    extended handlers for that connection. If it has a synchronous ``close``
+    method, pywire calls it when the connection is released.
+    """
+
+    @abc.abstractmethod
+    async def open(self, login: LoginInfo) -> Any:
+        """Return an object implementing the configured query handler methods."""
+
+
 async def serve(
     simple_query: SimpleQueryHandler,
     addr: str,
     *,
     auth: AuthSource | None = None,
     extended: ExtendedQueryHandler | None = None,
+    session_factory: SessionFactory | None = None,
     auth_method: Literal["trust", "cleartext", "scram-sha-256"] = "cleartext",
     tls: TLSConfig | None = None,
     scram_iterations: int = 4096,
@@ -91,6 +106,7 @@ async def serve(
         addr,
         auth=auth,
         extended=extended,
+        session_factory=session_factory,
         auth_method=auth_method,
         tls_cert=tls.cert if tls else None,
         tls_key=tls.key if tls else None,
@@ -99,4 +115,4 @@ async def serve(
     )
 
 
-__all__ = ["TLSConfig", "serve"]
+__all__ = ["SessionFactory", "TLSConfig", "serve"]

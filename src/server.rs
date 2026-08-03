@@ -40,7 +40,9 @@ use pgwire::api::query::{
     ExtendedQueryHandler as PgExtendedQueryHandler, SimpleQueryHandler as PgSimpleQueryHandler,
 };
 use pgwire::api::results::Response;
-use pgwire::api::{ClientInfo, ClientPortalStore, ConnectionManager, PgWireServerHandlers};
+use pgwire::api::{
+    ClientInfo, ClientPortalStore, ConnectionManager, PgWireConnectionState, PgWireServerHandlers,
+};
 use pgwire::error::{PgWireError, PgWireResult};
 use pgwire::messages::{PgWireBackendMessage, PgWireFrontendMessage};
 use pgwire::tokio::process_socket;
@@ -50,7 +52,7 @@ use pyo3::prelude::*;
 use pyo3_async_runtimes::tokio as pyo3_tokio;
 use tokio::net::TcpListener;
 
-use crate::auth::PyAuthSource;
+use crate::auth::{PyAuthSource, PyLoginInfo};
 use crate::errors::py_err_to_pywire;
 use crate::extended::PyExtendedHandler;
 use crate::query::PyQueryHandler;
@@ -65,15 +67,17 @@ struct PyServerSimpleQueryHandler {
 
 #[async_trait]
 impl PgSimpleQueryHandler for PyServerSimpleQueryHandler {
-    async fn do_query<C>(&self, _client: &mut C, query: &str) -> PgWireResult<Vec<Response>>
+    async fn do_query<C>(&self, client: &mut C, query: &str) -> PgWireResult<Vec<Response>>
     where
         C: ClientInfo + ClientPortalStore + Sink<PgWireBackendMessage> + Unpin + Send + Sync,
     {
-        let py_responses = self
-            .inner
-            .do_query(query)
-            .await
-            .map_err(|err| Python::attach(|py| py_err_to_pywire(py, err)))?;
+        let session = client.session_extensions().get::<PySession>();
+        let py_responses = if let Some(session) = session {
+            PyQueryHandler::do_query_on(&session.instance, query).await
+        } else {
+            self.inner.do_query(query).await
+        }
+        .map_err(|err| Python::attach(|py| py_err_to_pywire(py, err)))?;
         Ok(py_responses.into_iter().map(|r| r.into_pg()).collect())
     }
 }
@@ -87,6 +91,22 @@ impl PgSimpleQueryHandler for PyServerSimpleQueryHandler {
 /// later if we ever need to).
 #[derive(Debug)]
 struct PyAuthSourceWrapper(Arc<PyAuthSource>);
+
+#[derive(Debug)]
+pub(crate) struct PySession {
+    pub(crate) instance: Py<PyAny>,
+}
+
+impl Drop for PySession {
+    fn drop(&mut self) {
+        Python::attach(|py| {
+            let instance = self.instance.bind(py);
+            if instance.hasattr("close").unwrap_or(false) {
+                let _ = instance.call_method0("close");
+            }
+        });
+    }
+}
 
 #[async_trait]
 impl PgAuthSource for PyAuthSourceWrapper {
@@ -104,6 +124,7 @@ impl PgAuthSource for PyAuthSourceWrapper {
 struct PyStartupHandler {
     inner: PyStartupInner,
     require_tls: bool,
+    session_factory: Option<Arc<Py<PyAny>>>,
 }
 
 enum PyStartupInner {
@@ -161,7 +182,25 @@ impl StartupHandler for PyStartupHandler {
             PyStartupInner::Noop(h) => h.on_startup(client, message).await,
             PyStartupInner::Cleartext(h) => h.on_startup(client, message).await,
             PyStartupInner::Scram(h) => h.on_startup(client, message).await,
+        }?;
+        if matches!(client.state(), PgWireConnectionState::ReadyForQuery)
+            && client.session_extensions().get::<PySession>().is_none()
+        {
+            if let Some(factory) = &self.session_factory {
+                let login = LoginInfo::from_client_info(client);
+                let py_login = PyLoginInfo::from_pg(&login);
+                let future = Python::attach(|py| -> PyResult<_> {
+                    let coroutine = factory.bind(py).call_method1("open", (py_login,))?;
+                    pyo3_tokio::into_future(coroutine)
+                })
+                .map_err(|error| Python::attach(|py| py_err_to_pywire(py, error)))?;
+                let instance = future
+                    .await
+                    .map_err(|error| Python::attach(|py| py_err_to_pywire(py, error)))?;
+                client.session_extensions().insert(PySession { instance });
+            }
         }
+        Ok(())
     }
 }
 
@@ -211,6 +250,7 @@ struct HandlerConfig {
     require_tls: bool,
     scram_iterations: usize,
     tls_certificate_pem: Option<Arc<Vec<u8>>>,
+    session_factory: Option<Arc<Py<PyAny>>>,
 }
 
 impl HandlerConfig {
@@ -250,6 +290,7 @@ impl HandlerConfig {
             startup: Arc::new(PyStartupHandler {
                 inner: startup,
                 require_tls: self.require_tls,
+                session_factory: self.session_factory.clone(),
             }),
             extended_query: self.extended_query.clone(),
             cancel: Arc::new(DefaultCancelHandler::new(self.manager.clone())),
@@ -295,13 +336,14 @@ fn load_tls(cert_path: &str, key_path: &str) -> PyResult<(TlsAcceptor, Arc<Vec<u
 /// cancel via `asyncio.Task.cancel` to stop.
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
-#[pyo3(signature = (simple_query, addr, *, auth = None, extended = None, auth_method = "cleartext", tls_cert = None, tls_key = None, require_tls = false, scram_iterations = 4096))]
+#[pyo3(signature = (simple_query, addr, *, auth = None, extended = None, session_factory = None, auth_method = "cleartext", tls_cert = None, tls_key = None, require_tls = false, scram_iterations = 4096))]
 fn serve<'py>(
     py: Python<'py>,
     simple_query: Bound<'py, PyAny>,
     addr: String,
     auth: Option<Bound<'py, PyAny>>,
     extended: Option<Bound<'py, PyAny>>,
+    session_factory: Option<Bound<'py, PyAny>>,
     auth_method: &str,
     tls_cert: Option<String>,
     tls_key: Option<String>,
@@ -363,6 +405,7 @@ fn serve<'py>(
         require_tls,
         scram_iterations,
         tls_certificate_pem,
+        session_factory: session_factory.map(|value| Arc::new(value.unbind())),
     });
 
     // Capture the caller's asyncio task locals (event loop) so spawned

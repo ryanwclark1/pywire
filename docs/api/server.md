@@ -83,6 +83,31 @@ await pywire.server.serve(
 
 When TLS is configured, SCRAM-SHA-256-PLUS channel binding is advertised.
 
+## Per-connection sessions
+
+Pass a `SessionFactory` when handlers need state tied to the authenticated
+connection, such as a tenant, transaction, or audit context. `open` runs after
+authentication and receives the final `LoginInfo`. The returned object handles
+simple and extended queries for that connection. pywire calls its optional
+synchronous `close()` method when the connection is released.
+
+```python
+from pywire.server import SessionFactory
+
+
+class Sessions(SessionFactory):
+    async def open(self, login: LoginInfo) -> Hello:
+        return Hello()
+
+
+await pywire.server.serve(
+    Hello(),
+    "127.0.0.1:5433",
+    auth=users,
+    session_factory=Sessions(),
+)
+```
+
 To stop the server, cancel the task it lives in:
 
 ```python

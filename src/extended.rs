@@ -21,6 +21,7 @@ use pyo3_async_runtimes::tokio as pyo3_tokio;
 
 use crate::errors::py_err_to_pywire;
 use crate::query::{PyFieldInfo, PyResponse};
+use crate::server::PySession;
 
 #[derive(Debug)]
 pub struct PyStatement(pub Py<PyAny>);
@@ -43,6 +44,20 @@ pub struct PyExtendedHandler {
 impl PyExtendedHandler {
     pub fn new(instance: Option<Py<PyAny>>) -> Self {
         Self { instance }
+    }
+
+    fn instance_for<C: ClientInfo>(&self, client: &C) -> Option<Py<PyAny>> {
+        Python::attach(|py| {
+            client
+                .session_extensions()
+                .get::<PySession>()
+                .map(|session| session.instance.clone_ref(py))
+                .or_else(|| {
+                    self.instance
+                        .as_ref()
+                        .map(|instance| instance.clone_ref(py))
+                })
+        })
     }
 
     async fn bind_portal(
@@ -77,11 +92,12 @@ impl PyExtendedHandler {
 
     async fn parse_statement(
         &self,
+        instance: Option<&Py<PyAny>>,
         name: &str,
         sql: &str,
         types: &[Option<Type>],
     ) -> PgWireResult<PyStatement> {
-        let Some(instance) = &self.instance else {
+        let Some(instance) = instance else {
             return Err(PgWireError::ApiError(
                 "extended query callback is not configured".into(),
             ));
@@ -125,26 +141,6 @@ fn pg_type(oid: u32) -> Type {
     Type::from_oid(oid).unwrap_or(Type::UNKNOWN)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn format_code_helpers_cover_all_pgwire_shapes() {
-        assert_eq!(format_codes(&Format::UnifiedText, 2), vec![0, 0]);
-        assert_eq!(format_codes(&Format::UnifiedBinary, 2), vec![1, 1]);
-        assert_eq!(format_codes(&Format::Individual(vec![0, 1]), 2), vec![0, 1]);
-        assert!(result_format_codes(&Format::UnifiedText).is_empty());
-        assert_eq!(result_format_codes(&Format::UnifiedBinary), vec![1]);
-        assert_eq!(
-            result_format_codes(&Format::Individual(vec![1, 0])),
-            vec![1, 0]
-        );
-        assert_eq!(pg_type(23), Type::INT4);
-        assert_eq!(pg_type(u32::MAX), Type::UNKNOWN);
-    }
-}
-
 #[async_trait]
 impl QueryParser for PyExtendedHandler {
     type Statement = PyStatement;
@@ -162,7 +158,8 @@ impl QueryParser for PyExtendedHandler {
     where
         C: ClientInfo + Unpin + Send + Sync,
     {
-        self.parse_statement("", sql, types).await
+        self.parse_statement(self.instance.as_ref(), "", sql, types)
+            .await
     }
 
     fn get_parameter_types(&self, _stmt: &Self::Statement) -> PgWireResult<Vec<Type>> {
@@ -210,7 +207,10 @@ impl PgExtendedQueryHandler for PyExtendedHandler {
             .iter()
             .map(|oid| Type::from_oid(*oid))
             .collect::<Vec<_>>();
-        let statement = self.parse_statement(&name, &message.query, &types).await?;
+        let instance = self.instance_for(client);
+        let statement = self
+            .parse_statement(instance.as_ref(), &name, &message.query, &types)
+            .await?;
         client
             .portal_store()
             .put_statement(Arc::new(StoredStatement::new(name, statement, types)));
@@ -222,7 +222,7 @@ impl PgExtendedQueryHandler for PyExtendedHandler {
 
     async fn do_describe_statement<C>(
         &self,
-        _client: &mut C,
+        client: &mut C,
         target: &StoredStatement<Self::Statement>,
     ) -> PgWireResult<DescribeStatementResponse>
     where
@@ -231,7 +231,7 @@ impl PgExtendedQueryHandler for PyExtendedHandler {
         C::Error: Debug,
         PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
     {
-        let Some(instance) = &self.instance else {
+        let Some(instance) = self.instance_for(client) else {
             return Ok(DescribeStatementResponse::new(vec![], vec![]));
         };
         let future = Python::attach(|py| -> PyResult<_> {
@@ -264,7 +264,7 @@ impl PgExtendedQueryHandler for PyExtendedHandler {
 
     async fn do_describe_portal<C>(
         &self,
-        _client: &mut C,
+        client: &mut C,
         target: &Portal<Self::Statement>,
     ) -> PgWireResult<DescribePortalResponse>
     where
@@ -273,11 +273,10 @@ impl PgExtendedQueryHandler for PyExtendedHandler {
         C::Error: Debug,
         PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
     {
-        if self.instance.is_none() {
+        let Some(instance) = self.instance_for(client) else {
             return Ok(DescribePortalResponse::new(vec![]));
-        }
-        let instance = self.instance.as_ref().expect("checked above");
-        let portal = self.bind_portal(instance, target).await?;
+        };
+        let portal = self.bind_portal(&instance, target).await?;
         let future = Python::attach(|py| -> PyResult<_> {
             let coroutine = instance
                 .bind(py)
@@ -301,7 +300,7 @@ impl PgExtendedQueryHandler for PyExtendedHandler {
 
     async fn do_query<C>(
         &self,
-        _client: &mut C,
+        client: &mut C,
         portal: &Portal<Self::Statement>,
         max_rows: usize,
     ) -> PgWireResult<Response>
@@ -311,8 +310,8 @@ impl PgExtendedQueryHandler for PyExtendedHandler {
         C::Error: Debug,
         PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
     {
-        if let Some(instance) = &self.instance {
-            let py_portal = self.bind_portal(instance, portal).await?;
+        if let Some(instance) = self.instance_for(client) {
+            let py_portal = self.bind_portal(&instance, portal).await?;
             let future = Python::attach(|py| -> PyResult<_> {
                 let coroutine = instance
                     .bind(py)
@@ -333,5 +332,25 @@ impl PgExtendedQueryHandler for PyExtendedHandler {
         Err(PgWireError::ApiError(
             "extended query callback is not configured".into(),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_code_helpers_cover_all_pgwire_shapes() {
+        assert_eq!(format_codes(&Format::UnifiedText, 2), vec![0, 0]);
+        assert_eq!(format_codes(&Format::UnifiedBinary, 2), vec![1, 1]);
+        assert_eq!(format_codes(&Format::Individual(vec![0, 1]), 2), vec![0, 1]);
+        assert!(result_format_codes(&Format::UnifiedText).is_empty());
+        assert_eq!(result_format_codes(&Format::UnifiedBinary), vec![1]);
+        assert_eq!(
+            result_format_codes(&Format::Individual(vec![1, 0])),
+            vec![1, 0]
+        );
+        assert_eq!(pg_type(23), Type::INT4);
+        assert_eq!(pg_type(u32::MAX), Type::UNKNOWN);
     }
 }

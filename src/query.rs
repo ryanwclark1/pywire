@@ -387,8 +387,12 @@ impl PyQueryHandler {
 
 impl PyQueryHandler {
     pub async fn do_query(&self, query: &str) -> PyResult<Vec<PyResponse>> {
+        Self::do_query_on(&self.instance, query).await
+    }
+
+    pub async fn do_query_on(instance: &Py<PyAny>, query: &str) -> PyResult<Vec<PyResponse>> {
         let fut = Python::attach(|py| -> PyResult<_> {
-            let coro = self.instance.bind(py).call_method1("do_query", (query,))?;
+            let coro = instance.bind(py).call_method1("do_query", (query,))?;
             pyo3_tokio::into_future(coro)
         })?;
 

@@ -22,6 +22,7 @@ import contextlib
 import hashlib
 from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import cast
 
 import psycopg
 import pytest
@@ -91,6 +92,7 @@ async def _running_server(  # type: ignore[no-untyped-def]
     extended: query.ExtendedQueryHandler | None = None,
     auth_method: str = "cleartext",
     tls: server.TLSConfig | None = None,
+    session_factory: server.SessionFactory | None = None,
 ):
     """Run `server.serve` on a free port, yield the port, cancel on exit."""
     port = await _test_bind_ephemeral()
@@ -103,6 +105,7 @@ async def _running_server(  # type: ignore[no-untyped-def]
             extended=extended,
             auth_method=auth_method,  # type: ignore[arg-type]
             tls=tls,
+            session_factory=session_factory,
         )
     )
     # Give the listener a moment to bind.
@@ -147,6 +150,57 @@ async def test_simple_query_round_trip_over_tcp():
             assert b"hi" in response
             # And a final ReadyForQuery.
             assert b"Z" in response
+        finally:
+            writer.close()
+            with contextlib.suppress(Exception):
+                await writer.wait_closed()
+
+
+async def test_session_factory_opens_and_closes_per_connection():
+    events: list[tuple[str, str | None]] = []
+
+    class Session(query.SimpleQueryHandler):
+        async def do_query(self, q: str) -> list[query.Response]:
+            return [query.Response.query([query.FieldInfo("session")], [[b"yes"]])]
+
+        def close(self) -> None:
+            events.append(("close", None))
+
+    class Factory(server.SessionFactory):
+        async def open(self, login: auth.LoginInfo) -> Session:
+            events.append(("open", login.user))
+            return Session()
+
+    async with _running_server(_DummyHandler(), session_factory=Factory()) as port:
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        writer.write(messages.Startup(parameters={"user": "session-user"}).encode())
+        await writer.drain()
+        await _await_with_data(reader)
+        writer.write(messages.Query("SELECT 1").encode())
+        await writer.drain()
+        assert b"yes" in await _await_with_data(reader)
+        writer.close()
+        await writer.wait_closed()
+        await asyncio.sleep(0.05)
+
+    assert events == [("open", "session-user"), ("close", None)]
+
+
+@pytest.mark.parametrize("failure", ["not-awaitable", "raised"])
+async def test_session_factory_errors_reach_the_client(failure: str) -> None:
+    class Factory(server.SessionFactory):
+        async def open(self, login: auth.LoginInfo) -> object:
+            raise errors.InvalidPassword("session rejected")
+
+    factory = cast(server.SessionFactory, object()) if failure == "not-awaitable" else Factory()
+
+    async with _running_server(_DummyHandler(), session_factory=factory) as port:
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        try:
+            writer.write(messages.Startup(parameters={"user": "rejected"}).encode())
+            await writer.drain()
+            payload = await _await_with_data(reader)
+            assert b"E" in payload
         finally:
             writer.close()
             with contextlib.suppress(Exception):
