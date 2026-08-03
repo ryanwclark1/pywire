@@ -560,16 +560,22 @@ async def test_scram_tls_and_extended_fallback_with_psycopg():
         auth_method="scram-sha-256",
         tls=tls,
     ) as port:
-        with pytest.raises(psycopg.OperationalError):
-            await psycopg.AsyncConnection.connect(
+
+        def connect_without_tls() -> None:
+            psycopg.connect(
                 f"host=127.0.0.1 port={port} user=alice password=secret sslmode=disable"
-            )
-        async with await psycopg.AsyncConnection.connect(
-            f"host=127.0.0.1 port={port} user=alice password=secret sslmode=require"
-        ) as connection:
-            async with connection.cursor() as cursor:
-                await cursor.execute("SELECT 1")
-                assert await cursor.fetchall() == [(1,)]
+            ).close()
+
+        with pytest.raises(psycopg.OperationalError):
+            await asyncio.to_thread(connect_without_tls)
+
+        def query_over_tls() -> list[tuple[int]]:
+            with psycopg.connect(
+                f"host=127.0.0.1 port={port} user=alice password=secret sslmode=require"
+            ) as connection:
+                return connection.execute("SELECT 1").fetchall()
+
+        assert await asyncio.to_thread(query_over_tls) == [(1,)]
 
 
 async def test_cleartext_auth_accepts_correct_password():
