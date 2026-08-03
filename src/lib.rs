@@ -3,6 +3,7 @@ use pyo3::prelude::*;
 
 mod auth;
 mod errors;
+mod extended;
 mod messages;
 mod query;
 mod runtime;

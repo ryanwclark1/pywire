@@ -25,7 +25,7 @@ To pin to the upstream pgwire minor we wrap, install an exact version per
 the policy in [Versioning](versioning.md):
 
 ```bash
-pip install 'pywire~=0.40.0'
+pip install 'pywire~=0.40.5'
 ```
 
 ## From source

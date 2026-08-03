@@ -1,4 +1,5 @@
 import abc
+from collections.abc import AsyncIterable
 from dataclasses import dataclass
 
 from pywire.errors import ErrorInfo
@@ -12,8 +13,9 @@ class FieldInfo:
 
     name: str
     type_id: int
+    format: int
 
-    def __init__(self, name: str, *, type_id: int = 25) -> None: ...
+    def __init__(self, name: str, *, type_id: int = 25, format: int = 0) -> None: ...
     def __eq__(self, other: object) -> bool: ...
     def __hash__(self) -> int: ...
 
@@ -41,6 +43,14 @@ class Response:
         command_tag: str = "SELECT",
     ) -> Response: ...
     @classmethod
+    def stream(
+        cls,
+        fields: list[FieldInfo],
+        rows: AsyncIterable[list[bytes | None]],
+        *,
+        command_tag: str = "SELECT",
+    ) -> Response: ...
+    @classmethod
     def error(cls, info: ErrorInfo) -> Response: ...
 
 class SimpleQueryHandler(abc.ABC):
@@ -62,6 +72,7 @@ class Portal:
     name: str
     statement: PreparedStatement
     parameters: list[bytes | None] = ...
+    parameter_formats: list[int] = ...
     result_formats: list[int] = ...
 
 @dataclass(frozen=True)
@@ -88,6 +99,7 @@ class ExtendedQueryHandler(abc.ABC):
         name: str,
         statement: PreparedStatement,
         parameters: list[bytes | None],
+        parameter_formats: list[int],
         result_formats: list[int],
     ) -> Portal: ...
     @abc.abstractmethod

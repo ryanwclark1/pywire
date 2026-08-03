@@ -156,10 +156,16 @@ def test_startup_encodes_without_type_tag():
     params=st.dictionaries(
         st.text(
             min_size=1,
-            alphabet=st.characters(blacklist_categories=("Cs",), blacklist_characters="\x00"),
+            alphabet=st.characters(
+                blacklist_categories=("Cs",),  # type: ignore[arg-type]
+                blacklist_characters="\x00",
+            ),
         ),
         st.text(
-            alphabet=st.characters(blacklist_categories=("Cs",), blacklist_characters="\x00"),
+            alphabet=st.characters(
+                blacklist_categories=("Cs",),  # type: ignore[arg-type]
+                blacklist_characters="\x00",
+            ),
         ),
         max_size=5,
     ),
@@ -206,7 +212,14 @@ def test_command_complete_wire_shape():
     assert wire.endswith(b"\x00")
 
 
-@given(st.text(alphabet=st.characters(blacklist_categories=("Cs",), blacklist_characters="\x00")))
+@given(
+    st.text(
+        alphabet=st.characters(
+            blacklist_categories=("Cs",),  # type: ignore[arg-type]
+            blacklist_characters="\x00",
+        )
+    )
+)
 def test_command_complete_round_trip_property(tag):
     c = CommandComplete(tag)
     assert CommandComplete.decode(c.encode()) == c

@@ -43,8 +43,8 @@ later PRs — see
 from pywire.messages import Query
 
 q = Query("SELECT 1")
-wire = q.encode()                  # b'Q\x00\x00\x00\rSELECT 1\x00'
-back = Query.decode(wire)          # Query(query="SELECT 1")
+wire = q.encode()  # b'Q\x00\x00\x00\rSELECT 1\x00'
+back = Query.decode(wire)  # Query(query="SELECT 1")
 assert back == q
 ```
 

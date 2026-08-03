@@ -36,7 +36,7 @@ jobs:
           cache: pip
 
       - name: Install python lint deps
-        run: pip install ruff mypy
+        run: pip install -e '.[dev]'
 
       - name: ruff check
         run: ruff check .
@@ -91,7 +91,7 @@ jobs:
           cache: pip
 
       - name: Install build and test deps
-        run: pip install maturin pytest pytest-cov pytest-asyncio hypothesis
+        run: pip install maturin pytest pytest-cov pytest-asyncio hypothesis 'psycopg[binary]'
 
       # The coverage cell drives cargo test + pytest itself (via
       # scripts/coverage.sh, which does its own `pip install -e .`

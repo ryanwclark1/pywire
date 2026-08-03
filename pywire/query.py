@@ -83,13 +83,14 @@ class Portal:
 
     `parameters` is a list of `bytes | None` — one entry per parameter,
     text-format encoded, or `None` for SQL NULL.
-    `result_formats` is a list of `0` (text) or `1` (binary) per output
-    column. An empty list means "all text".
+    `parameter_formats` and `result_formats` are lists of `0` (text) or
+    `1` (binary) per input/output column. An empty list means "all text".
     """
 
     name: str
     statement: PreparedStatement
     parameters: list[bytes | None] = field(default_factory=list)
+    parameter_formats: list[int] = field(default_factory=list)
     result_formats: list[int] = field(default_factory=list)
 
 
@@ -141,6 +142,7 @@ class ExtendedQueryHandler(abc.ABC):
         name: str,
         statement: PreparedStatement,
         parameters: list[bytes | None],
+        parameter_formats: list[int],
         result_formats: list[int],
     ) -> Portal:
         """Bind `parameters` to `statement`, producing a named `Portal`."""

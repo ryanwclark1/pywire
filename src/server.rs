@@ -8,14 +8,12 @@
 //!   adapter (PR F). The Python handler returns `list[Response]`; we
 //!   convert each entry to pgwire's `Response` and the server takes
 //!   care of writing the frames.
-//! - **Startup / auth**: `PyStartupHandler` dispatches between
-//!   `NoopHandler` (no auth, every client trusted) and pgwire's
-//!   `CleartextPasswordAuthStartupHandler` driven by a Python
-//!   `AuthSource` subclass. Selected at `serve()` time by the
-//!   `auth=...` keyword argument.
-//! - **Extended query, COPY, cancel**: fall through to pgwire's
-//!   `NoopHandler` defaults. v0.40.1+ will plumb the Python ABCs
-//!   from PRs G and H through here.
+//! - **Startup / auth**: trust, cleartext, and SCRAM-SHA-256, with
+//!   optional TLS and SCRAM channel binding.
+//! - **Extended query**: Parse/Bind/Describe/Execute route to the
+//!   Python `ExtendedQueryHandler`; pgwire owns portal suspension.
+//! - **Cancel**: pgwire's connection manager routes PostgreSQL cancel
+//!   requests to the active Python query future.
 //!
 //! `pywire.serve(simple_query, addr, *, auth=None)` binds a TCP
 //! listener and returns a Python awaitable that runs the accept
@@ -29,21 +27,33 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use futures::sink::Sink;
 use pgwire::api::auth::cleartext::CleartextPasswordAuthStartupHandler;
+use pgwire::api::auth::noop::NoopStartupHandler;
+use pgwire::api::auth::sasl::scram::ScramAuth;
+use pgwire::api::auth::sasl::SASLAuthStartupHandler;
 use pgwire::api::auth::{
     AuthSource as PgAuthSource, DefaultServerParameterProvider, LoginInfo, StartupHandler,
 };
-use pgwire::api::query::SimpleQueryHandler as PgSimpleQueryHandler;
+use pgwire::api::cancel::{CancelHandler, DefaultCancelHandler};
+use pgwire::api::query::{
+    ExtendedQueryHandler as PgExtendedQueryHandler, SimpleQueryHandler as PgSimpleQueryHandler,
+};
 use pgwire::api::results::Response;
-use pgwire::api::{ClientInfo, ClientPortalStore, NoopHandler, PgWireServerHandlers};
+use pgwire::api::{
+    ClientInfo, ClientPortalStore, ConnectionManager, PgWireConnectionState, PgWireServerHandlers,
+};
 use pgwire::error::{PgWireError, PgWireResult};
 use pgwire::messages::{PgWireBackendMessage, PgWireFrontendMessage};
 use pgwire::tokio::process_socket;
+use pgwire::tokio::tokio_rustls::rustls::ServerConfig;
+use pgwire::tokio::TlsAcceptor;
 use pyo3::prelude::*;
 use pyo3_async_runtimes::tokio as pyo3_tokio;
+use rustls_pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer};
 use tokio::net::TcpListener;
 
-use crate::auth::PyAuthSource;
+use crate::auth::{PyAuthSource, PyLoginInfo};
 use crate::errors::py_err_to_pywire;
+use crate::extended::PyExtendedHandler;
 use crate::query::PyQueryHandler;
 
 // ---------- SimpleQueryHandler adapter --------------------------------
@@ -56,15 +66,17 @@ struct PyServerSimpleQueryHandler {
 
 #[async_trait]
 impl PgSimpleQueryHandler for PyServerSimpleQueryHandler {
-    async fn do_query<C>(&self, _client: &mut C, query: &str) -> PgWireResult<Vec<Response>>
+    async fn do_query<C>(&self, client: &mut C, query: &str) -> PgWireResult<Vec<Response>>
     where
         C: ClientInfo + ClientPortalStore + Sink<PgWireBackendMessage> + Unpin + Send + Sync,
     {
-        let py_responses = self
-            .inner
-            .do_query(query)
-            .await
-            .map_err(|err| Python::attach(|py| py_err_to_pywire(py, err)))?;
+        let session = client.session_extensions().get::<PySession>();
+        let py_responses = if let Some(session) = session {
+            PyQueryHandler::do_query_on(&session.instance, query).await
+        } else {
+            self.inner.do_query(query).await
+        }
+        .map_err(|err| Python::attach(|py| py_err_to_pywire(py, err)))?;
         Ok(py_responses.into_iter().map(|r| r.into_pg()).collect())
     }
 }
@@ -78,6 +90,22 @@ impl PgSimpleQueryHandler for PyServerSimpleQueryHandler {
 /// later if we ever need to).
 #[derive(Debug)]
 struct PyAuthSourceWrapper(Arc<PyAuthSource>);
+
+#[derive(Debug)]
+pub(crate) struct PySession {
+    pub(crate) instance: Py<PyAny>,
+}
+
+impl Drop for PySession {
+    fn drop(&mut self) {
+        Python::attach(|py| {
+            let instance = self.instance.bind(py);
+            if instance.hasattr("close").unwrap_or(false) {
+                let _ = instance.call_method0("close");
+            }
+        });
+    }
+}
 
 #[async_trait]
 impl PgAuthSource for PyAuthSourceWrapper {
@@ -94,10 +122,12 @@ impl PgAuthSource for PyAuthSourceWrapper {
 /// dispatch with a tagged enum and an explicit `StartupHandler` impl.
 struct PyStartupHandler {
     inner: PyStartupInner,
+    require_tls: bool,
+    session_factory: Option<Arc<Py<PyAny>>>,
 }
 
 enum PyStartupInner {
-    Noop(NoopHandler),
+    Noop(ManagedNoopStartup),
     /// Boxed because pgwire's handler is ~256 bytes and the `Noop`
     /// variant is zero-sized — clippy's `large_enum_variant` triggers
     /// without the indirection.
@@ -109,6 +139,18 @@ enum PyStartupInner {
             >,
         >,
     ),
+    Scram(Box<SASLAuthStartupHandler<DefaultServerParameterProvider>>),
+}
+
+struct ManagedNoopStartup {
+    manager: Arc<ConnectionManager>,
+}
+
+#[async_trait]
+impl NoopStartupHandler for ManagedNoopStartup {
+    fn connection_manager(&self) -> Option<Arc<ConnectionManager>> {
+        Some(self.manager.clone())
+    }
 }
 
 #[async_trait]
@@ -123,10 +165,41 @@ impl StartupHandler for PyStartupHandler {
         C::Error: Debug,
         PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
     {
+        if self.require_tls
+            && matches!(message, PgWireFrontendMessage::Startup(_))
+            && !client.is_secure()
+        {
+            return Err(PgWireError::UserError(Box::new(
+                pgwire::error::ErrorInfo::new(
+                    "FATAL".to_owned(),
+                    "28000".to_owned(),
+                    "TLS is required".to_owned(),
+                ),
+            )));
+        }
         match &self.inner {
             PyStartupInner::Noop(h) => h.on_startup(client, message).await,
             PyStartupInner::Cleartext(h) => h.on_startup(client, message).await,
+            PyStartupInner::Scram(h) => h.on_startup(client, message).await,
+        }?;
+        if matches!(client.state(), PgWireConnectionState::ReadyForQuery)
+            && client.session_extensions().get::<PySession>().is_none()
+        {
+            if let Some(factory) = &self.session_factory {
+                let login = LoginInfo::from_client_info(client);
+                let py_login = PyLoginInfo::from_pg(&login);
+                let future = Python::attach(|py| -> PyResult<_> {
+                    let coroutine = factory.bind(py).call_method1("open", (py_login,))?;
+                    pyo3_tokio::into_future(coroutine)
+                })
+                .map_err(|error| Python::attach(|py| py_err_to_pywire(py, error)))?;
+                let instance = future
+                    .await
+                    .map_err(|error| Python::attach(|py| py_err_to_pywire(py, error)))?;
+                client.session_extensions().insert(PySession { instance });
+            }
         }
+        Ok(())
     }
 }
 
@@ -136,6 +209,8 @@ impl StartupHandler for PyStartupHandler {
 struct PyServerHandlers {
     simple_query: Arc<PyServerSimpleQueryHandler>,
     startup: Arc<PyStartupHandler>,
+    extended_query: Arc<PyExtendedHandler>,
+    cancel: Arc<DefaultCancelHandler>,
 }
 
 impl PgWireServerHandlers for PyServerHandlers {
@@ -147,9 +222,103 @@ impl PgWireServerHandlers for PyServerHandlers {
         self.startup.clone()
     }
 
-    // Default extended_query_handler / copy_handler / error_handler /
-    // cancel_handler from the trait blanket impl return pgwire's
-    // `NoopHandler`. Wired in v0.40.1+.
+    fn extended_query_handler(&self) -> Arc<impl PgExtendedQueryHandler> {
+        self.extended_query.clone()
+    }
+
+    fn cancel_handler(&self) -> Arc<impl CancelHandler> {
+        self.cancel.clone()
+    }
+
+    // COPY and custom error handling retain pgwire's defaults.
+}
+
+#[derive(Clone, Copy)]
+enum AuthMethod {
+    Trust,
+    Cleartext,
+    Scram,
+}
+
+struct HandlerConfig {
+    simple_query: Arc<PyServerSimpleQueryHandler>,
+    extended_query: Arc<PyExtendedHandler>,
+    auth: Option<Arc<PyAuthSource>>,
+    auth_method: AuthMethod,
+    manager: Arc<ConnectionManager>,
+    require_tls: bool,
+    scram_iterations: usize,
+    tls_certificate_pem: Option<Arc<Vec<u8>>>,
+    session_factory: Option<Arc<Py<PyAny>>>,
+}
+
+impl HandlerConfig {
+    fn build(&self) -> PgWireResult<PyServerHandlers> {
+        let startup = match self.auth_method {
+            AuthMethod::Trust => PyStartupInner::Noop(ManagedNoopStartup {
+                manager: self.manager.clone(),
+            }),
+            AuthMethod::Cleartext => {
+                let auth = self.auth.as_ref().expect("validated auth configuration");
+                PyStartupInner::Cleartext(Box::new(
+                    CleartextPasswordAuthStartupHandler::new(
+                        PyAuthSourceWrapper(auth.clone()),
+                        DefaultServerParameterProvider::default(),
+                    )
+                    .with_connection_manager(self.manager.clone()),
+                ))
+            }
+            AuthMethod::Scram => {
+                let auth = self.auth.as_ref().expect("validated auth configuration");
+                let mut scram = ScramAuth::new(Arc::new(PyAuthSourceWrapper(auth.clone())));
+                scram.set_iterations(self.scram_iterations);
+                if let Some(certificate) = &self.tls_certificate_pem {
+                    scram.configure_certificate(certificate)?;
+                } // LCOV_EXCL_LINE - closing region emitted separately by llvm-cov
+                PyStartupInner::Scram(Box::new(
+                    SASLAuthStartupHandler::new(
+                        Arc::new(DefaultServerParameterProvider::default()),
+                    )
+                    .with_scram(scram)
+                    .with_connection_manager(self.manager.clone()),
+                ))
+            }
+        };
+        Ok(PyServerHandlers {
+            simple_query: self.simple_query.clone(),
+            startup: Arc::new(PyStartupHandler {
+                inner: startup,
+                require_tls: self.require_tls,
+                session_factory: self.session_factory.clone(),
+            }),
+            extended_query: self.extended_query.clone(),
+            cancel: Arc::new(DefaultCancelHandler::new(self.manager.clone())),
+        })
+    }
+}
+
+fn load_tls(cert_path: &str, key_path: &str) -> PyResult<(TlsAcceptor, Arc<Vec<u8>>)> {
+    let certificate_pem = std::fs::read(cert_path).map_err(|error| {
+        pyo3::exceptions::PyOSError::new_err(format!("read TLS certificate {cert_path:?}: {error}"))
+    })?;
+    let certificates = CertificateDer::pem_file_iter(cert_path)
+        .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+    let key_pem = std::fs::read(key_path).map_err(|error| {
+        pyo3::exceptions::PyOSError::new_err(format!("read TLS key {key_path:?}: {error}"))
+    })?;
+    let key = PrivateKeyDer::from_pem_slice(&key_pem)
+        .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+    let mut config = ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(certificates, key)
+        .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+    config.alpn_protocols = vec![b"postgresql".to_vec()];
+    Ok((
+        TlsAcceptor::from(Arc::new(config)),
+        Arc::new(certificate_pem),
+    ))
 }
 
 // ---------- Python entry point ----------------------------------------
@@ -166,36 +335,78 @@ impl PgWireServerHandlers for PyServerHandlers {
 /// Returns a Python awaitable that runs the accept loop forever;
 /// cancel via `asyncio.Task.cancel` to stop.
 #[pyfunction]
-#[pyo3(signature = (simple_query, addr, *, auth = None))]
+#[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (simple_query, addr, *, auth = None, extended = None, session_factory = None, auth_method = "cleartext", tls_cert = None, tls_key = None, require_tls = false, scram_iterations = 4096))]
 fn serve<'py>(
     py: Python<'py>,
     simple_query: Bound<'py, PyAny>,
     addr: String,
     auth: Option<Bound<'py, PyAny>>,
+    extended: Option<Bound<'py, PyAny>>,
+    session_factory: Option<Bound<'py, PyAny>>,
+    auth_method: &str,
+    tls_cert: Option<String>,
+    tls_key: Option<String>,
+    require_tls: bool,
+    scram_iterations: usize,
 ) -> PyResult<Bound<'py, PyAny>> {
     let socket_addr = SocketAddr::from_str(&addr).map_err(|e| {
         pyo3::exceptions::PyValueError::new_err(format!("invalid address {addr:?}: {e}"))
     })?;
 
-    let startup_inner = match auth {
-        None => PyStartupInner::Noop(NoopHandler),
-        Some(auth_obj) => {
-            let py_auth = Arc::new(PyAuthSource::new(auth_obj.unbind()));
-            PyStartupInner::Cleartext(Box::new(CleartextPasswordAuthStartupHandler::new(
-                PyAuthSourceWrapper(py_auth),
-                DefaultServerParameterProvider::default(),
-            )))
+    let auth_method = match (auth.is_some(), auth_method) {
+        (false, "cleartext" | "trust") => AuthMethod::Trust,
+        (true, "cleartext") => AuthMethod::Cleartext,
+        (true, "scram-sha-256" | "scram") => AuthMethod::Scram,
+        (true, "trust") => AuthMethod::Trust,
+        (false, "scram-sha-256" | "scram") => {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "SCRAM authentication requires auth=AuthSource",
+            ));
+        }
+        (_, value) => {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "unsupported auth_method {value:?}"
+            )));
         }
     };
-
-    let handlers = PyServerHandlers {
-        simple_query: Arc::new(PyServerSimpleQueryHandler {
-            inner: Arc::new(PyQueryHandler::new(simple_query.unbind())),
-        }),
-        startup: Arc::new(PyStartupHandler {
-            inner: startup_inner,
-        }),
+    if scram_iterations < 4096 {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "scram_iterations must be at least 4096",
+        ));
+    }
+    let (tls_acceptor, tls_certificate_pem) = match (tls_cert, tls_key) {
+        (Some(cert), Some(key)) => {
+            let (acceptor, pem) = load_tls(&cert, &key)?;
+            (Some(acceptor), Some(pem))
+        }
+        (None, None) if !require_tls => (None, None),
+        (None, None) => {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "require_tls=True requires tls_cert and tls_key",
+            ));
+        }
+        _ => {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "tls_cert and tls_key must be supplied together",
+            ));
+        }
     };
+    let simple = Arc::new(PyQueryHandler::new(simple_query.unbind()));
+    let manager = Arc::new(ConnectionManager::new());
+    let config = Arc::new(HandlerConfig {
+        simple_query: Arc::new(PyServerSimpleQueryHandler {
+            inner: simple.clone(),
+        }),
+        extended_query: Arc::new(PyExtendedHandler::new(extended.map(Bound::unbind))),
+        auth: auth.map(|value| Arc::new(PyAuthSource::new(value.unbind()))),
+        auth_method,
+        manager,
+        require_tls,
+        scram_iterations,
+        tls_certificate_pem,
+        session_factory: session_factory.map(|value| Arc::new(value.unbind())),
+    });
 
     // Capture the caller's asyncio task locals (event loop) so spawned
     // per-connection tasks can re-enter Python and `await` user
@@ -215,15 +426,17 @@ fn serve<'py>(
                 .accept()
                 .await
                 .map_err(|e| pyo3::exceptions::PyOSError::new_err(format!("accept failed: {e}")))?; // LCOV_EXCL_LINE
-            let handlers = handlers.clone();
+            let handlers = config
+                .build()
+                .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))?;
+            let handlers = Arc::new(handlers);
+            let tls_acceptor = tls_acceptor.clone();
             let locals = task_locals.clone();
             tokio::spawn(async move {
-                let _ =
-                    pyo3_tokio::scope(
-                        locals,
-                        async move { process_socket(sock, None, handlers).await },
-                    )
-                    .await;
+                let _ = pyo3_tokio::scope(locals, async move {
+                    process_socket(sock, tls_acceptor, handlers).await
+                })
+                .await;
             });
         }
         // Unreachable; the loop body never breaks. The type annotation

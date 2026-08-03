@@ -3,7 +3,7 @@
 `pywire.server.serve(simple_query, addr)` is the high-level entry
 point: bind a TCP listener, accept connections, and dispatch each one
 through pgwire's connection-state machine. Each connection gets its own
-async task; queries flow through your `SimpleQueryHandler`.
+async task; queries flow through your simple and optional extended handlers.
 
 ## Quick example — open (no auth)
 
@@ -61,8 +61,52 @@ async def main() -> None:
 On connect, pywire sends `AuthenticationCleartextPassword`, awaits the
 client's `PasswordMessage`, and calls your `get_password` to look up
 the reference password. A mismatch surfaces as
-`pywire.errors.InvalidPassword` (SQLSTATE `28P01`). MD5 and SCRAM
-land in v0.40.2.
+`pywire.errors.InvalidPassword` (SQLSTATE `28P01`).
+
+## SCRAM and TLS
+
+For SCRAM-SHA-256, return the salted password and salt expected by
+pgwire, and select `auth_method="scram-sha-256"`. TLS takes a PEM
+certificate/key pair and can be required:
+
+```python
+from pywire.server import TLSConfig
+
+await pywire.server.serve(
+    Hello(),
+    "0.0.0.0:5433",
+    auth=users,
+    auth_method="scram-sha-256",
+    tls=TLSConfig("server.crt", "server.key", require=True),
+)
+```
+
+When TLS is configured, SCRAM-SHA-256-PLUS channel binding is advertised.
+
+## Per-connection sessions
+
+Pass a `SessionFactory` when handlers need state tied to the authenticated
+connection, such as a tenant, transaction, or audit context. `open` runs after
+authentication and receives the final `LoginInfo`. The returned object handles
+simple and extended queries for that connection. pywire calls its optional
+synchronous `close()` method when the connection is released.
+
+```python
+from pywire.server import SessionFactory
+
+
+class Sessions(SessionFactory):
+    async def open(self, login: LoginInfo) -> Hello:
+        return Hello()
+
+
+await pywire.server.serve(
+    Hello(),
+    "127.0.0.1:5433",
+    auth=users,
+    session_factory=Sessions(),
+)
+```
 
 To stop the server, cancel the task it lives in:
 
@@ -74,19 +118,17 @@ task.cancel()
 
 ## Scope
 
-This first iteration of the server is intentionally narrow.
-
 | Capability        | Status                                                                                  |
 | ----------------- | --------------------------------------------------------------------------------------- |
 | TCP accept loop   | ✅ Multiple concurrent connections via tokio task per connection.                       |
 | Simple query (`'Q'`) | ✅ Routed to your `SimpleQueryHandler.do_query`.                                     |
 | Startup handshake | ✅ With or without authentication, controlled by the `auth=...` argument.               |
 | Cleartext auth    | ✅ Pass an `AuthSource` subclass; pywire runs PostgreSQL's cleartext-password flow.     |
-| MD5 / SCRAM auth  | ⬜ Land in v0.40.2; SCRAM needs pgwire's `_ring` / `_aws-lc-rs` feature.                |
-| Extended query    | ⬜ `Parse`/`Bind`/`Describe`/`Execute` get a protocol error today. The Python ABC is in place (`pywire.query.ExtendedQueryHandler`); wiring lands in a follow-up. |
+| SCRAM auth        | ✅ SCRAM-SHA-256 and TLS channel binding via pgwire's ring backend.                    |
+| Extended query    | ✅ `Parse`/`Bind`/`Describe`/`Execute`, binary formats, and portal suspension.         |
 | COPY              | ⬜ Same — protocol error today; `pywire.copy.CopyHandler` ABC is in place.              |
-| Cancel requests   | ⬜ pgwire's `NoopHandler` default; no cancel-token routing yet.                         |
-| TLS               | ⬜ Plain TCP only. SSL/TLS negotiation lands in a follow-up.                            |
+| Cancel requests   | ✅ PostgreSQL cancel requests cancel the active query future.                           |
+| TLS               | ✅ PostgreSQL TLS negotiation with optional TLS-required policy.                        |
 
 ## Errors that reach the wire
 
