@@ -2,6 +2,7 @@
 name = "pywire"
 version = "0.40.5"
 edition = "2021"
+license = "MIT"
 
 [lib]
 name = "pywire"
@@ -13,7 +14,7 @@ bytes = "1"
 futures = "0.3"
 pgwire = { version = "0.40.5", default-features = false, features = ["server-api-ring"] }
 postgres-types = "0.2"
-pyo3 = { version = "0.28.3", features = ["abi3-py311"] }
-pyo3-async-runtimes = { version = "0.28", features = ["tokio-runtime"] }
+pyo3 = { version = "0.29.1", features = ["abi3-py311"] }
+pyo3-async-runtimes = { version = "0.29", features = ["tokio-runtime"] }
+rustls-pki-types = { version = "1", features = ["std"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
-rustls-pemfile = "2"

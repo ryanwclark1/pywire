@@ -20,8 +20,6 @@
 //! loop forever; cancel the `asyncio.Task` to stop.
 
 use std::fmt::Debug;
-use std::fs::File;
-use std::io::{BufReader, Cursor};
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -50,6 +48,7 @@ use pgwire::tokio::tokio_rustls::rustls::ServerConfig;
 use pgwire::tokio::TlsAcceptor;
 use pyo3::prelude::*;
 use pyo3_async_runtimes::tokio as pyo3_tokio;
+use rustls_pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer};
 use tokio::net::TcpListener;
 
 use crate::auth::{PyAuthSource, PyLoginInfo};
@@ -302,14 +301,15 @@ fn load_tls(cert_path: &str, key_path: &str) -> PyResult<(TlsAcceptor, Arc<Vec<u
     let certificate_pem = std::fs::read(cert_path).map_err(|error| {
         pyo3::exceptions::PyOSError::new_err(format!("read TLS certificate {cert_path:?}: {error}"))
     })?;
-    let certificates = rustls_pemfile::certs(&mut Cursor::new(&certificate_pem))
+    let certificates = CertificateDer::pem_file_iter(cert_path)
+        .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
-    let key = rustls_pemfile::private_key(&mut BufReader::new(File::open(key_path).map_err(
-        |error| pyo3::exceptions::PyOSError::new_err(format!("open TLS key {key_path:?}: {error}")),
-    )?))
-    .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?
-    .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("TLS key contains no private key"))?;
+    let key_pem = std::fs::read(key_path).map_err(|error| {
+        pyo3::exceptions::PyOSError::new_err(format!("read TLS key {key_path:?}: {error}"))
+    })?;
+    let key = PrivateKeyDer::from_pem_slice(&key_pem)
+        .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
     let mut config = ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(certificates, key)
