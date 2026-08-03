@@ -19,12 +19,17 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
+from collections.abc import AsyncIterator
+from pathlib import Path
 
+import psycopg
 import pytest
 
 import pywire
 from pywire import auth, errors, messages, query, server
 from pywire._pywire import _test_bind_ephemeral  # type: ignore[attr-defined]
+from pywire._pywire import serve as _native_serve  # type: ignore[attr-defined]
 
 
 def test_server_is_exposed_under_pywire():
@@ -83,11 +88,23 @@ async def _running_server(  # type: ignore[no-untyped-def]
     handler: query.SimpleQueryHandler,
     *,
     auth_source: auth.AuthSource | None = None,
+    extended: query.ExtendedQueryHandler | None = None,
+    auth_method: str = "cleartext",
+    tls: server.TLSConfig | None = None,
 ):
     """Run `server.serve` on a free port, yield the port, cancel on exit."""
     port = await _test_bind_ephemeral()
     addr = f"127.0.0.1:{port}"
-    task = asyncio.create_task(server.serve(handler, addr, auth=auth_source))
+    task = asyncio.create_task(
+        server.serve(
+            handler,
+            addr,
+            auth=auth_source,
+            extended=extended,
+            auth_method=auth_method,  # type: ignore[arg-type]
+            tls=tls,
+        )
+    )
     # Give the listener a moment to bind.
     await asyncio.sleep(0.05)
     try:
@@ -175,6 +192,45 @@ async def test_serve_rejects_invalid_address():
         await server.serve(_DummyHandler(), "not-an-address")
 
 
+async def test_serve_validates_security_options():
+    with pytest.raises(ValueError, match="unsupported auth_method"):
+        await server.serve(_DummyHandler(), "127.0.0.1:1", auth_method="md5")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="requires auth"):
+        await server.serve(_DummyHandler(), "127.0.0.1:1", auth_method="scram-sha-256")
+    with pytest.raises(ValueError, match="at least 4096"):
+        await server.serve(_DummyHandler(), "127.0.0.1:1", scram_iterations=1)
+    with pytest.raises(OSError, match="TLS certificate"):
+        await server.serve(
+            _DummyHandler(),
+            "127.0.0.1:1",
+            tls=server.TLSConfig("missing.crt", "missing.key"),
+        )
+    with pytest.raises(ValueError, match="requires tls_cert"):
+        _native_serve(_DummyHandler(), "127.0.0.1:1", require_tls=True)
+    with pytest.raises(ValueError, match="supplied together"):
+        _native_serve(_DummyHandler(), "127.0.0.1:1", tls_cert="missing.crt")
+
+
+async def test_serve_validates_tls_files(tmp_path: Path) -> None:
+    fixtures = Path(__file__).parent / "fixtures"
+    with pytest.raises(OSError, match="TLS key"):
+        await server.serve(
+            _DummyHandler(),
+            "127.0.0.1:1",
+            tls=server.TLSConfig(str(fixtures / "server.crt"), "missing.key"),
+        )
+    bad_certificate = tmp_path / "bad.crt"
+    bad_key = tmp_path / "bad.key"
+    bad_certificate.write_text("not a certificate")
+    bad_key.write_text("not a key")
+    with pytest.raises(ValueError):
+        await server.serve(
+            _DummyHandler(),
+            "127.0.0.1:1",
+            tls=server.TLSConfig(str(bad_certificate), str(bad_key)),
+        )
+
+
 async def test_serve_surfaces_bind_failure_as_os_error():
     """A second `serve` on the same port should fail at bind time."""
     port = await _test_bind_ephemeral()
@@ -193,6 +249,194 @@ async def test_serve_surfaces_bind_failure_as_os_error():
 class _DummyHandler(query.SimpleQueryHandler):
     async def do_query(self, q: str) -> list[query.Response]:
         return []
+
+
+def _frontend_message(kind: bytes, body: bytes = b"") -> bytes:
+    return kind + (len(body) + 4).to_bytes(4, "big") + body
+
+
+async def test_extended_query_binary_stream_and_portal_suspension():
+    calls: list[tuple[str, object]] = []
+
+    class Extended(query.ExtendedQueryHandler):
+        async def parse_statement(
+            self, name: str, q: str, parameter_types: list[int]
+        ) -> query.PreparedStatement:
+            calls.append(("parse", name))
+            return query.PreparedStatement(name, q, parameter_types)
+
+        async def describe_statement(
+            self, statement: query.PreparedStatement
+        ) -> query.DescribeStatementResponse:
+            return query.DescribeStatementResponse([23], [query.FieldInfo("v", type_id=23)])
+
+        async def bind_portal(
+            self,
+            name: str,
+            statement: query.PreparedStatement,
+            parameters: list[bytes | None],
+            parameter_formats: list[int],
+            result_formats: list[int],
+        ) -> query.Portal:
+            calls.append(("bind", (parameter_formats, result_formats)))
+            return query.Portal(
+                name,
+                statement,
+                parameters,
+                parameter_formats,
+                result_formats,
+            )
+
+        async def describe_portal(self, portal: query.Portal) -> query.DescribePortalResponse:
+            return query.DescribePortalResponse([query.FieldInfo("v", type_id=23, format=1)])
+
+        async def do_query(self, portal: query.Portal, max_rows: int) -> query.Response:
+            async def rows() -> AsyncIterator[list[bytes | None]]:
+                start = int.from_bytes(portal.parameters[0] or b"", "big", signed=True)
+                for value in range(start, start + 3):
+                    yield [value.to_bytes(4, "big", signed=True)]
+
+            return query.Response.stream(
+                [query.FieldInfo("v", type_id=23, format=1)],
+                rows(),
+            )
+
+    async with _running_server(_DummyHandler(), extended=Extended()) as port:
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        try:
+            writer.write(messages.Startup(parameters={"user": "tester"}).encode())
+            await writer.drain()
+            await _await_with_data(reader)
+
+            parse = b"s1\x00SELECT $1::int\x00" + (1).to_bytes(2, "big") + (23).to_bytes(4, "big")
+            bind = (
+                b"p1\x00s1\x00"
+                + (1).to_bytes(2, "big")
+                + (1).to_bytes(2, "big")
+                + (1).to_bytes(2, "big")
+                + (4).to_bytes(4, "big")
+                + (7).to_bytes(4, "big", signed=True)
+                + (1).to_bytes(2, "big")
+                + (1).to_bytes(2, "big")
+            )
+            describe_statement = b"Ss1\x00"
+            describe = b"Pp1\x00"
+            execute = b"p1\x00" + (2).to_bytes(4, "big")
+            writer.write(
+                _frontend_message(b"P", parse)
+                + _frontend_message(b"D", describe_statement)
+                + _frontend_message(b"B", bind)
+                + _frontend_message(b"D", describe)
+                + _frontend_message(b"E", execute)
+                + _frontend_message(b"E", execute)
+                + _frontend_message(b"S")
+            )
+            await writer.drain()
+            payload = await _await_with_data(reader)
+            assert b"s" in payload  # PortalSuspended
+            assert b"v\x00" in payload
+            assert all(value.to_bytes(4, "big") in payload for value in (7, 8, 9))
+            assert ("parse", "s1") in calls
+            assert ("bind", ([1], [1])) in calls
+        finally:
+            writer.close()
+            with contextlib.suppress(Exception):
+                await writer.wait_closed()
+
+
+@pytest.mark.parametrize("mode", ["invalid-row", "async-error", "next-error"])
+async def test_stream_errors_reach_the_client(mode: str) -> None:
+    class BrokenNext:
+        def __aiter__(self) -> BrokenNext:
+            return self
+
+        def __anext__(self) -> object:
+            raise RuntimeError("broken next")
+
+    class Streaming(query.SimpleQueryHandler):
+        async def do_query(self, q: str) -> list[query.Response]:
+            async def invalid_rows() -> AsyncIterator[list[object]]:
+                yield [object()]
+
+            async def failing_rows() -> AsyncIterator[list[bytes | None]]:
+                if False:  # pragma: no cover - makes this an async generator
+                    yield []
+                raise RuntimeError("broken stream")
+
+            rows: object
+            if mode == "invalid-row":
+                rows = invalid_rows()
+            elif mode == "async-error":
+                rows = failing_rows()
+            else:
+                rows = BrokenNext()
+            return [
+                query.Response.stream(
+                    [query.FieldInfo("v")],
+                    rows,  # type: ignore[arg-type]
+                )
+            ]
+
+    async with _running_server(Streaming()) as port:
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        try:
+            writer.write(messages.Startup(parameters={"user": "tester"}).encode())
+            await writer.drain()
+            await _await_with_data(reader)
+            writer.write(messages.Query("SELECT 1").encode())
+            await writer.drain()
+            payload = await _await_with_data(reader)
+            assert b"E" in payload
+        finally:
+            writer.close()
+            with contextlib.suppress(Exception):
+                await writer.wait_closed()
+
+
+@pytest.mark.parametrize("configured", [False, True])
+async def test_extended_parse_errors_reach_the_client(configured: bool) -> None:
+    class FailingExtended(query.ExtendedQueryHandler):
+        async def parse_statement(
+            self, name: str, q: str, parameter_types: list[int]
+        ) -> query.PreparedStatement:
+            raise errors.QueryCanceled("parse failed")
+
+        async def describe_statement(
+            self, statement: query.PreparedStatement
+        ) -> query.DescribeStatementResponse:
+            raise AssertionError("unreachable")
+
+        async def bind_portal(
+            self,
+            name: str,
+            statement: query.PreparedStatement,
+            parameters: list[bytes | None],
+            parameter_formats: list[int],
+            result_formats: list[int],
+        ) -> query.Portal:
+            raise AssertionError("unreachable")
+
+        async def describe_portal(self, portal: query.Portal) -> query.DescribePortalResponse:
+            raise AssertionError("unreachable")
+
+        async def do_query(self, portal: query.Portal, max_rows: int) -> query.Response:
+            raise AssertionError("unreachable")
+
+    extended = FailingExtended() if configured else None
+    async with _running_server(_DummyHandler(), extended=extended) as port:
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        try:
+            writer.write(messages.Startup(parameters={"user": "tester"}).encode())
+            await writer.drain()
+            await _await_with_data(reader)
+            unnamed_parse = b"\x00SELECT 1\x00" + (0).to_bytes(2, "big")
+            writer.write(_frontend_message(b"P", unnamed_parse) + _frontend_message(b"S"))
+            await writer.drain()
+            assert b"E" in await _await_with_data(reader)
+        finally:
+            writer.close()
+            with contextlib.suppress(Exception):
+                await writer.wait_closed()
 
 
 # ---- cleartext authentication ---------------------------------------
@@ -214,6 +458,64 @@ class _StaticAuth(auth.AuthSource):
             return auth.Password(self.users[login.user or ""])
         except KeyError:
             raise errors.InvalidPassword(login.user or "") from None
+
+
+class _ScramAuth(auth.AuthSource):
+    async def get_password(self, login: auth.LoginInfo) -> auth.Password:
+        salt = b"0123456789abcdef"
+        salted = hashlib.pbkdf2_hmac("sha256", b"secret", salt, 4096)
+        return auth.Password(salted, salt=salt)
+
+
+async def test_trust_auth_method_ignores_configured_auth_source():
+    async with _running_server(
+        _DummyHandler(),
+        auth_source=_StaticAuth({}),
+        auth_method="trust",
+    ) as port:
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        try:
+            writer.write(messages.Startup(parameters={"user": "unknown"}).encode())
+            await writer.drain()
+            assert b"Z" in await _await_with_data(reader)
+        finally:
+            writer.close()
+            with contextlib.suppress(Exception):
+                await writer.wait_closed()
+
+
+async def test_scram_tls_and_extended_fallback_with_psycopg():
+    fixtures = Path(__file__).parent / "fixtures"
+    tls = server.TLSConfig(
+        str(fixtures / "server.crt"),
+        str(fixtures / "server.key"),
+    )
+
+    class One(query.SimpleQueryHandler):
+        async def do_query(self, q: str) -> list[query.Response]:
+            return [
+                query.Response.query(
+                    [query.FieldInfo("one", type_id=23)],
+                    [[b"1"]],
+                )
+            ]
+
+    async with _running_server(
+        One(),
+        auth_source=_ScramAuth(),
+        auth_method="scram-sha-256",
+        tls=tls,
+    ) as port:
+        with pytest.raises(psycopg.OperationalError):
+            await psycopg.AsyncConnection.connect(
+                f"host=127.0.0.1 port={port} user=alice password=secret sslmode=disable"
+            )
+        async with await psycopg.AsyncConnection.connect(
+            f"host=127.0.0.1 port={port} user=alice password=secret sslmode=require"
+        ) as connection:
+            async with connection.cursor() as cursor:
+                await cursor.execute("SELECT 1")
+                assert await cursor.fetchall() == [(1,)]
 
 
 async def test_cleartext_auth_accepts_correct_password():

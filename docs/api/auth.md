@@ -3,8 +3,8 @@
 `pywire.auth` exposes the user-facing surface for plugging
 authentication into a pywire server. You define your auth policy by
 subclassing `AuthSource` and implementing an async `get_password`
-method. pywire's startup handlers (cleartext / MD5 / SCRAM, shipping
-with `pywire.server`) call your method during the connection handshake.
+method. pywire's cleartext and SCRAM startup handlers call your method
+during the connection handshake.
 
 ## The shape
 
@@ -57,13 +57,6 @@ When a client connects, the pywire server:
 The await happens inside pywire's tokio runtime. Long-running lookups
 (database queries, LDAP, HTTP) are fine as long as they are themselves
 async — they will not block other connections.
-
-!!! warning "Server bindings not yet shipped"
-    The startup handlers (`CleartextPasswordHandler`,
-    `Md5PasswordHandler`, `SaslScramHandler`) and the high-level
-    `pywire.serve(...)` entry point land with `pywire.server` (PR I).
-    Today you can write your `AuthSource` subclass and have it be
-    fully ready, but you can't yet stand up a running server with it.
 
 ## Reference
 

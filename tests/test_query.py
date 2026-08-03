@@ -13,6 +13,8 @@ Three concerns:
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+
 import pytest
 from pywire._pywire.query import _test_drive_handler  # type: ignore[import-not-found]
 
@@ -46,6 +48,13 @@ def test_field_info_with_int4_oid():
     assert f.type_id == 23
     assert "id" in repr(f)
     assert "23" in repr(f)
+
+
+def test_field_info_binary_format():
+    f = query.FieldInfo("id", type_id=23, format=1)
+    assert f.format == 1
+    with pytest.raises(ValueError, match="format must be"):
+        query.FieldInfo("id", format=2)
 
 
 async def test_custom_type_oid_round_trips_through_row_description():
@@ -113,6 +122,28 @@ def test_response_query_with_custom_tag():
         command_tag="SELECT 1",
     )
     assert "SELECT 1" in repr(r)
+
+
+def test_response_stream_shape():
+    async def rows() -> AsyncIterator[list[bytes | None]]:
+        yield [b"1"]
+
+    response = query.Response.stream([query.FieldInfo("v")], rows())
+    assert response.kind == "stream"
+    assert "Response.stream" in repr(response)
+
+
+async def test_stream_response_drives_handler_summary():
+    class Streaming(query.SimpleQueryHandler):
+        async def do_query(self, q: str) -> list[query.Response]:
+            async def rows() -> AsyncIterator[list[bytes | None]]:
+                yield [b"1"]
+
+            return [query.Response.stream([query.FieldInfo("v")], rows())]
+
+    assert await _test_drive_handler(Streaming(), "SELECT 1") == [
+        ("stream", "tag=SELECT fields=1 stream")
+    ]
 
 
 def test_response_error():
@@ -291,12 +322,14 @@ async def test_extended_query_handler_concrete_subclass():
             name: str,
             statement: query.PreparedStatement,
             parameters: list[bytes | None],
+            parameter_formats: list[int],
             result_formats: list[int],
         ) -> query.Portal:
             return query.Portal(
                 name=name,
                 statement=statement,
                 parameters=parameters,
+                parameter_formats=parameter_formats,
                 result_formats=result_formats,
             )
 
@@ -309,7 +342,7 @@ async def test_extended_query_handler_concrete_subclass():
     h = NoopExtended()
     stmt = await h.parse_statement("s1", "SELECT 1", [])
     assert stmt.name == "s1"
-    portal = await h.bind_portal("p1", stmt, [], [])
+    portal = await h.bind_portal("p1", stmt, [], [], [])
     assert portal.statement is stmt
     resp = await h.do_query(portal, 0)
     assert resp.kind == "execution"

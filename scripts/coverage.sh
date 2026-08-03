@@ -33,10 +33,16 @@ PROFDATA="$REPO_ROOT/target/cov.profdata"
 LLVM_PROFDATA=$(rustup which llvm-profdata 2>/dev/null || true)
 LLVM_COV=$(rustup which llvm-cov 2>/dev/null || true)
 if [[ -z "$LLVM_PROFDATA" ]]; then
-  LLVM_PROFDATA=$(find ~/.rustup/toolchains -name llvm-profdata 2>/dev/null | head -1)
+  LLVM_PROFDATA=$(find ~/.rustup/toolchains -name llvm-profdata 2>/dev/null | head -1 || true)
 fi
 if [[ -z "$LLVM_COV" ]]; then
-  LLVM_COV=$(find ~/.rustup/toolchains -name llvm-cov 2>/dev/null | head -1)
+  LLVM_COV=$(find ~/.rustup/toolchains -name llvm-cov 2>/dev/null | head -1 || true)
+fi
+if [[ -z "$LLVM_PROFDATA" ]]; then
+  LLVM_PROFDATA=$(command -v llvm-profdata || true)
+fi
+if [[ -z "$LLVM_COV" ]]; then
+  LLVM_COV=$(command -v llvm-cov || true)
 fi
 if [[ -z "$LLVM_PROFDATA" || -z "$LLVM_COV" ]]; then
   echo "ERROR: llvm-profdata / llvm-cov not found. Install via:" >&2
@@ -141,6 +147,8 @@ DECORATION_PATTERNS = [
 # trailing comment on the line you want excluded. The line is then
 # treated like decoration: it doesn't count toward total or missed.
 LCOV_EXCL_LINE = "LCOV_EXCL_LINE"
+LCOV_EXCL_START = "LCOV_EXCL_START"
+LCOV_EXCL_STOP = "LCOV_EXCL_STOP"
 
 
 def is_decoration(source_line: str) -> bool:
@@ -177,9 +185,18 @@ for fname, lines in file_lines.items():
             source = fh.readlines()
     except OSError:
         continue
+    excluded_lines: set[int] = set()
+    excluded_block = False
+    for source_line_no, source_line in enumerate(source, start=1):
+        if LCOV_EXCL_START in source_line:
+            excluded_block = True
+        if excluded_block:
+            excluded_lines.add(source_line_no)
+        if LCOV_EXCL_STOP in source_line:
+            excluded_block = False
     for line_no, count in lines:
         src_line = source[line_no - 1] if 1 <= line_no <= len(source) else ""
-        if count == 0 and is_decoration(src_line):
+        if count == 0 and (line_no in excluded_lines or is_decoration(src_line)):
             exempted_decoration.append(f"{fname}:{line_no} {src_line.rstrip()}")
             continue
         total += 1

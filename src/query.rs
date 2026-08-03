@@ -34,7 +34,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyType;
 use pyo3_async_runtimes::tokio as pyo3_tokio;
 
-use crate::errors::PyErrorInfo;
+use crate::errors::{py_err_to_pywire, PyErrorInfo};
 
 // ---------- FieldInfo -------------------------------------------------
 
@@ -53,18 +53,33 @@ pub struct PyFieldInfo {
     /// The PostgreSQL OID of this column's type. Default `25` (TEXT).
     #[pyo3(get)]
     pub type_id: u32,
+    /// PostgreSQL format code: 0 for text, 1 for binary.
+    #[pyo3(get)]
+    pub format: i16,
 }
 
 #[pymethods]
 impl PyFieldInfo {
     #[new]
-    #[pyo3(signature = (name, *, type_id = 25))]
-    fn new(name: String, type_id: u32) -> Self {
-        Self { name, type_id }
+    #[pyo3(signature = (name, *, type_id = 25, format = 0))]
+    fn new(name: String, type_id: u32, format: i16) -> PyResult<Self> {
+        if !matches!(format, 0 | 1) {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "format must be 0 (text) or 1 (binary)",
+            ));
+        }
+        Ok(Self {
+            name,
+            type_id,
+            format,
+        })
     }
 
     fn __repr__(&self) -> String {
-        format!("FieldInfo(name={:?}, type_id={})", self.name, self.type_id)
+        format!(
+            "FieldInfo(name={:?}, type_id={}, format={})",
+            self.name, self.type_id, self.format
+        )
     }
 }
 
@@ -86,7 +101,12 @@ impl From<PyFieldInfo> for PgFieldInfo {
                 "pg_catalog".to_owned(),
             )
         });
-        PgFieldInfo::new(f.name, None, None, datatype, FieldFormat::Text)
+        let format = if f.format == 1 {
+            FieldFormat::Binary
+        } else {
+            FieldFormat::Text
+        };
+        PgFieldInfo::new(f.name, None, None, datatype, format)
     }
 }
 
@@ -99,6 +119,23 @@ struct QueryInner {
     command_tag: String,
 }
 
+#[derive(Debug)]
+struct StreamInner {
+    fields: Vec<PyFieldInfo>,
+    rows: Py<PyAny>,
+    command_tag: String,
+}
+
+impl Clone for StreamInner {
+    fn clone(&self) -> Self {
+        Python::attach(|py| Self {
+            fields: self.fields.clone(),
+            rows: self.rows.clone_ref(py),
+            command_tag: self.command_tag.clone(),
+        })
+    }
+}
+
 #[derive(Clone, Debug)]
 enum ResponseInner {
     Empty,
@@ -108,6 +145,7 @@ enum ResponseInner {
         rows: Option<usize>,
     },
     Query(Box<QueryInner>),
+    Stream(Box<StreamInner>),
     Error(Box<PyErrorInfo>),
 }
 
@@ -168,6 +206,26 @@ impl PyResponse {
         }
     }
 
+    /// A rows-returning response backed by an async iterable. Each row is
+    /// pulled only as pgwire is ready to write it, providing wire-level
+    /// backpressure without materializing the full result set.
+    #[classmethod]
+    #[pyo3(signature = (fields, rows, *, command_tag = String::from("SELECT")))]
+    fn stream(
+        _cls: &Bound<'_, PyType>,
+        fields: Vec<PyFieldInfo>,
+        rows: Py<PyAny>,
+        command_tag: String,
+    ) -> Self {
+        Self {
+            inner: ResponseInner::Stream(Box::new(StreamInner {
+                fields,
+                rows,
+                command_tag,
+            })),
+        }
+    }
+
     /// An error response. Carries the same `ErrorInfo` shape used by
     /// `pywire.errors`.
     #[classmethod]
@@ -184,6 +242,7 @@ impl PyResponse {
             ResponseInner::Empty => "empty",
             ResponseInner::Execution { .. } => "execution",
             ResponseInner::Query { .. } => "query",
+            ResponseInner::Stream { .. } => "stream",
             ResponseInner::Error(_) => "error",
         }
     }
@@ -200,13 +259,19 @@ impl PyResponse {
                 q.fields.len(),
                 q.rows.len()
             ),
+            ResponseInner::Stream(q) => format!(
+                "Response.stream(command_tag={:?}, fields={})",
+                q.command_tag,
+                q.fields.len()
+            ),
             ResponseInner::Error(_) => "Response.error(...)".to_owned(),
         }
     }
 }
 
-/// Encode one cell list into a `DataRow` body. Text format only: each
-/// cell is `length(i32)` + bytes (or `-1` for NULL).
+/// Encode one cell list into a `DataRow` body. Cell bytes are already
+/// encoded in the format declared by `FieldInfo`: each cell is
+/// `length(i32)` + bytes (or `-1` for NULL).
 fn encode_data_row(cells: &[Option<Vec<u8>>]) -> DataRow {
     let mut buf = BytesMut::with_capacity(
         cells
@@ -249,6 +314,51 @@ impl PyResponse {
                         .into_iter()
                         .map(|cells| Ok::<_, PgWireError>(encode_data_row(&cells))),
                 );
+                let mut qr = QueryResponse::new(Arc::new(pg_fields), row_stream);
+                qr.set_command_tag(&q.command_tag);
+                Response::Query(qr)
+            }
+            ResponseInner::Stream(q) => {
+                let pg_fields: Vec<PgFieldInfo> = q.fields.into_iter().map(Into::into).collect();
+                let row_stream = stream::unfold(Some(q.rows), |rows| async move {
+                    let rows = rows?;
+                    let future = Python::attach(|py| -> PyResult<_> {
+                        let awaitable = rows.bind(py).call_method0("__anext__")?;
+                        pyo3_tokio::into_future(awaitable)
+                    });
+                    match future {
+                        Ok(future) => match future.await {
+                            Ok(value) => {
+                                let cells = Python::attach(|py| {
+                                    value.bind(py).extract::<Vec<Option<Vec<u8>>>>()
+                                });
+                                match cells {
+                                    Ok(cells) => Some((Ok(encode_data_row(&cells)), Some(rows))),
+                                    Err(err) => Some((
+                                        Err(Python::attach(|py| py_err_to_pywire(py, err))),
+                                        None,
+                                    )),
+                                }
+                            }
+                            Err(err) => {
+                                let stopped = Python::attach(|py| {
+                                    err.is_instance_of::<pyo3::exceptions::PyStopAsyncIteration>(py)
+                                });
+                                if stopped {
+                                    None
+                                } else {
+                                    Some((
+                                        Err(Python::attach(|py| py_err_to_pywire(py, err))),
+                                        None,
+                                    ))
+                                }
+                            }
+                        },
+                        Err(err) => {
+                            Some((Err(Python::attach(|py| py_err_to_pywire(py, err))), None))
+                        }
+                    }
+                });
                 let mut qr = QueryResponse::new(Arc::new(pg_fields), row_stream);
                 qr.set_command_tag(&q.command_tag);
                 Response::Query(qr)
@@ -336,6 +446,9 @@ fn _test_drive_handler<'py>(
                             q.rows.len()
                         )
                     }
+                    ResponseInner::Stream(q) => {
+                        format!("tag={} fields={} stream", q.command_tag, q.fields.len())
+                    }
                     ResponseInner::Error(info) => {
                         let _: Response = PyResponse {
                             inner: ResponseInner::Error(info.clone()),
@@ -380,6 +493,7 @@ mod tests {
         let f = PyFieldInfo {
             name: "id".into(),
             type_id: 23,
+            format: 0,
         };
         let pg: PgFieldInfo = f.into();
         assert_eq!(pg.name(), "id");
@@ -396,6 +510,7 @@ mod tests {
         let f = PyFieldInfo {
             name: "custom".into(),
             type_id: CUSTOM_OID,
+            format: 0,
         };
         let pg: PgFieldInfo = f.into();
         assert_eq!(

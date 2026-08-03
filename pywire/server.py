@@ -52,9 +52,21 @@ client is then trusted.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import Literal
+
 from pywire._pywire import serve as _serve
 from pywire.auth import AuthSource
-from pywire.query import SimpleQueryHandler
+from pywire.query import ExtendedQueryHandler, SimpleQueryHandler
+
+
+@dataclass(frozen=True)
+class TLSConfig:
+    """PEM certificate/key pair used for PostgreSQL TLS negotiation."""
+
+    cert: str
+    key: str
+    require: bool = True
 
 
 async def serve(
@@ -62,6 +74,10 @@ async def serve(
     addr: str,
     *,
     auth: AuthSource | None = None,
+    extended: ExtendedQueryHandler | None = None,
+    auth_method: Literal["trust", "cleartext", "scram-sha-256"] = "cleartext",
+    tls: TLSConfig | None = None,
+    scram_iterations: int = 4096,
 ) -> None:
     """Async wrapper around the Rust accept loop.
 
@@ -70,7 +86,17 @@ async def serve(
     with `asyncio.create_task` and `asyncio.run` without
     `ensure_future`.
     """
-    await _serve(simple_query, addr, auth=auth)
+    await _serve(
+        simple_query,
+        addr,
+        auth=auth,
+        extended=extended,
+        auth_method=auth_method,
+        tls_cert=tls.cert if tls else None,
+        tls_key=tls.key if tls else None,
+        require_tls=tls.require if tls else False,
+        scram_iterations=scram_iterations,
+    )
 
 
-__all__ = ["serve"]
+__all__ = ["TLSConfig", "serve"]
