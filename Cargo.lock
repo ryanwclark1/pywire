@@ -690,7 +690,7 @@ dependencies = [
 
 [[package]]
 name = "pywire"
-version = "0.40.5"
+version = "0.41.0"
 dependencies = [
  "async-trait",
  "bytes",
