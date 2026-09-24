@@ -17,7 +17,7 @@ use pgwire::api::store::{Entry, PortalStore};
 use pgwire::api::{ClientInfo, ClientPortalStore, Type, DEFAULT_NAME};
 use pgwire::error::{ErrorInfo, PgWireError, PgWireResult};
 use pgwire::messages::extendedquery::{
-    Bind, BindComplete, Close, CloseComplete, Parse, ParseComplete, Sync as PgSync,
+    Bind, BindComplete, Close, CloseComplete, Execute, Parse, ParseComplete, Sync as PgSync,
     TARGET_TYPE_BYTE_PORTAL, TARGET_TYPE_BYTE_STATEMENT,
 };
 use pgwire::messages::response::{ReadyForQuery, TransactionStatus};
@@ -82,7 +82,11 @@ impl PythonPortals {
         let portals = std::mem::take(&mut *self.portals.lock().unwrap());
         let statements = std::mem::take(&mut *self.statements.lock().unwrap());
         let session = self.session.lock().unwrap().take();
-        cleanup_entries(portals, statements, session).await;
+        let locals = self.locals.clone();
+        let task = tokio::spawn(pyo3_tokio::scope(locals, async move {
+            cleanup_entries(portals, statements, session).await;
+        }));
+        let _ = task.await;
     }
 }
 
@@ -438,6 +442,21 @@ impl PgExtendedQueryHandler for PyExtendedHandler {
         }))
     }
     // LCOV_EXCL_STOP
+
+    async fn on_execute<C>(&self, client: &mut C, message: Execute) -> PgWireResult<()>
+    where
+        C: ClientInfo + ClientPortalStore + Sink<PgWireBackendMessage> + Unpin + Send + Sync,
+        C::PortalStore: PortalStore<Statement = Self::Statement>,
+        C::Error: Debug,
+        PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
+    {
+        let was_in_transaction = !matches!(client.transaction_status(), TransactionStatus::Idle);
+        let result = self._on_execute(client, message).await;
+        if was_in_transaction && matches!(client.transaction_status(), TransactionStatus::Idle) {
+            self.close_all_portals(client).await?;
+        }
+        result
+    }
 
     async fn on_parse<C>(&self, client: &mut C, message: Parse) -> PgWireResult<()>
     where

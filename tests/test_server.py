@@ -748,12 +748,12 @@ async def test_transaction_status_preserves_portal_until_commit():
             await writer.drain()
             await _await_with_data(reader)
 
-            def execute(sql: bytes, statement: bytes, portal: bytes) -> bytes:
+            def execute(sql: bytes, statement: bytes, portal: bytes, *, sync: bool = True) -> bytes:
                 return (
                     _frontend_message(b"P", statement + b"\x00" + sql + b"\x00\x00\x00")
                     + _frontend_message(b"B", portal + b"\x00" + statement + b"\x00" + b"\x00" * 6)
                     + _frontend_message(b"E", portal + b"\x00\x00\x00\x00\x00")
-                    + _frontend_message(b"S")
+                    + (_frontend_message(b"S") if sync else b"")
                 )
 
             writer.write(execute(b"BEGIN", b"begin", b"p_begin"))
@@ -764,10 +764,24 @@ async def test_transaction_status_preserves_portal_until_commit():
             await writer.drain()
             assert b"Z\x00\x00\x00\x05T" in await _await_with_data(reader)
             assert closed == []
-            writer.write(execute(b"COMMIT", b"commit", b"p_commit"))
+            writer.write(
+                execute(b"COMMIT", b"commit", b"p_commit", sync=False)
+                + _frontend_message(b"E", b"p_select\x00\x00\x00\x00\x00")
+                + _frontend_message(b"S")
+            )
             await writer.drain()
-            assert b"Z\x00\x00\x00\x05I" in await _await_with_data(reader)
+            response = await _await_with_data(reader)
+            assert b"Z\x00\x00\x00\x05I" in response
+            assert b"p_select" in response  # the pipelined Execute cannot reuse an expired portal
             assert sorted(closed) == ["p_begin", "p_commit", "p_select"]
+            writer.write(
+                _frontend_message(b"C", b"Sbegin\x00")
+                + _frontend_message(b"C", b"Sselect\x00")
+                + _frontend_message(b"C", b"Scommit\x00")
+                + _frontend_message(b"S")
+            )
+            await writer.drain()
+            await _await_with_data(reader)
         finally:
             writer.close()
             await writer.wait_closed()
@@ -938,6 +952,64 @@ async def test_session_closes_after_extended_resources(disconnect: str) -> None:
         await asyncio.wait_for(done.wait(), 2)
         writer.close()
         await writer.wait_closed()
+    assert closed == ["portal", "statement", "session"]
+
+
+async def test_server_cancellation_does_not_interrupt_pending_cleanup() -> None:
+    closed: list[str] = []
+    portal_close_started = asyncio.Event()
+    allow_portal_close = asyncio.Event()
+    done = asyncio.Event()
+
+    class Session(query.SimpleQueryHandler, query.ExtendedQueryHandler):
+        async def do_query(self, q, max_rows=None):
+            return []
+
+        async def parse_statement(self, name, q, parameter_types):
+            return query.PreparedStatement(name, q, parameter_types)
+
+        async def describe_statement(self, statement):
+            return query.DescribeStatementResponse([], [])
+
+        async def bind_portal(self, name, statement, parameters, parameter_formats, result_formats):
+            return query.Portal(name, statement)
+
+        async def describe_portal(self, portal):
+            return query.DescribePortalResponse([])
+
+        async def close_portal(self, name):
+            closed.append("portal")
+            portal_close_started.set()
+            await allow_portal_close.wait()
+
+        async def close_statement(self, name):
+            closed.append("statement")
+
+        def close(self):
+            closed.append("session")
+            done.set()
+
+    class Factory(server.SessionFactory):
+        async def open(self, login):
+            return Session()
+
+    async with _running_server(_DummyHandler(), session_factory=Factory()) as port:
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        writer.write(messages.Startup(parameters={"user": "tester"}).encode())
+        await writer.drain()
+        await _await_with_data(reader)
+        writer.write(
+            _frontend_message(b"P", b"s1\x00SELECT 1\x00\x00\x00")
+            + _frontend_message(b"B", b"p1\x00s1\x00" + b"\x00" * 6)
+            + _frontend_message(b"H")
+        )
+        await writer.drain()
+        await _await_with_data(reader)
+        writer.close()
+        await writer.wait_closed()
+        await asyncio.wait_for(portal_close_started.wait(), 2)
+    allow_portal_close.set()
+    await asyncio.wait_for(done.wait(), 2)
     assert closed == ["portal", "statement", "session"]
 
 
