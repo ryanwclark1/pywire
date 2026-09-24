@@ -47,8 +47,11 @@ pub struct PyExtendedHandler {
     instance: Option<Py<PyAny>>,
 }
 
-#[derive(Default)]
-struct PythonPortals(Mutex<HashMap<String, PortalEntry>>);
+pub(crate) struct PythonPortals {
+    portals: Mutex<HashMap<String, PortalEntry>>,
+    statements: Mutex<HashMap<String, Py<PyAny>>>,
+    locals: pyo3_async_runtimes::TaskLocals,
+}
 
 struct PortalEntry {
     statement_name: String,
@@ -58,6 +61,52 @@ struct PortalEntry {
 struct BoundPortal {
     instance: Py<PyAny>,
     portal: Py<PyAny>,
+}
+
+impl PythonPortals {
+    pub(crate) fn new(locals: pyo3_async_runtimes::TaskLocals) -> Self {
+        Self {
+            portals: Mutex::new(HashMap::new()),
+            statements: Mutex::new(HashMap::new()),
+            locals,
+        }
+    }
+
+    pub(crate) async fn cleanup(&self) {
+        let portals = std::mem::take(&mut *self.portals.lock().unwrap());
+        let statements = std::mem::take(&mut *self.statements.lock().unwrap());
+        cleanup_entries(portals, statements).await;
+    }
+}
+
+impl Drop for PythonPortals {
+    fn drop(&mut self) {
+        let portals = std::mem::take(self.portals.get_mut().unwrap());
+        let statements = std::mem::take(self.statements.get_mut().unwrap());
+        if portals.is_empty() && statements.is_empty() {
+            return;
+        }
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            let locals = self.locals.clone();
+            handle.spawn(pyo3_tokio::scope(locals, async move {
+                cleanup_entries(portals, statements).await;
+            }));
+        } // LCOV_EXCL_LINE - closing region emitted separately by llvm-cov
+    }
+}
+
+async fn cleanup_entries(
+    portals: HashMap<String, PortalEntry>,
+    statements: HashMap<String, Py<PyAny>>,
+) {
+    for (name, entry) in portals {
+        if let Some(bound) = entry.bound {
+            let _ = call_python(&bound.instance, "close_portal", &name).await;
+        } // LCOV_EXCL_LINE - closing region emitted separately by llvm-cov
+    }
+    for (name, instance) in statements {
+        let _ = call_python(&instance, "close_statement", &name).await;
+    }
 }
 
 impl PyExtendedHandler {
@@ -134,9 +183,9 @@ impl PyExtendedHandler {
     fn portal_for<C: ClientInfo>(&self, client: &C, name: &str) -> PgWireResult<Py<PyAny>> {
         let portals = client
             .session_extensions()
-            .get::<PythonPortals>()
+            .get::<Arc<PythonPortals>>()
             .ok_or_else(|| PgWireError::PortalNotFound(name.to_owned()))?;
-        let entries = portals.0.lock().unwrap();
+        let entries = portals.portals.lock().unwrap();
         Python::attach(|py| {
             entries
                 .get(name)
@@ -147,11 +196,11 @@ impl PyExtendedHandler {
     }
 
     async fn close_portal<C: ClientInfo>(&self, client: &C, name: &str) -> PgWireResult<()> {
-        let Some(portals) = client.session_extensions().get::<PythonPortals>() else {
-            return Ok(());
+        let Some(portals) = client.session_extensions().get::<Arc<PythonPortals>>() else {
+            return Ok(()); // LCOV_EXCL_LINE - startup always installs connection resources
         };
         let instance = {
-            let entries = portals.0.lock().unwrap();
+            let entries = portals.portals.lock().unwrap();
             Python::attach(|py| {
                 entries
                     .get(name)
@@ -162,7 +211,7 @@ impl PyExtendedHandler {
         if let Some(instance) = instance {
             call_python(&instance, "close_portal", name).await?;
         }
-        portals.0.lock().unwrap().remove(name);
+        portals.portals.lock().unwrap().remove(name);
         Ok(())
     }
 
@@ -173,10 +222,10 @@ impl PyExtendedHandler {
     {
         let portal_names = client
             .session_extensions()
-            .get::<PythonPortals>()
+            .get::<Arc<PythonPortals>>()
             .map(|portals| {
                 portals
-                    .0
+                    .portals
                     .lock()
                     .unwrap()
                     .iter()
@@ -199,6 +248,9 @@ impl PyExtendedHandler {
                 call_python(&instance, "close_statement", name).await?;
             }
             // LCOV_EXCL_STOP
+        }
+        if let Some(portals) = client.session_extensions().get::<Arc<PythonPortals>>() {
+            portals.statements.lock().unwrap().remove(name);
         }
         client.portal_store().rm_statement(name);
         Ok(())
@@ -366,6 +418,15 @@ impl PgExtendedQueryHandler for PyExtendedHandler {
             let statement = self
                 .parse_statement(instance.as_ref(), &name, &message.query, &message.type_oids)
                 .await?;
+            let instance = instance.expect("parsed statements have a Python handler");
+            client
+                .session_extensions()
+                .get::<Arc<PythonPortals>>()
+                .expect("startup installed connection resources")
+                .statements
+                .lock()
+                .unwrap()
+                .insert(name.clone(), instance);
             client
                 .portal_store()
                 .put_statement(Arc::new(StoredStatement::new(name, statement, types)));
@@ -422,8 +483,9 @@ impl PgExtendedQueryHandler for PyExtendedHandler {
                 let py_portal = self.bind_portal(&instance, &portal).await?;
                 client
                     .session_extensions()
-                    .get_or_insert_with(PythonPortals::default)
-                    .0
+                    .get::<Arc<PythonPortals>>()
+                    .expect("startup installed connection resources")
+                    .portals
                     .lock()
                     .unwrap()
                     .insert(
@@ -459,8 +521,9 @@ impl PgExtendedQueryHandler for PyExtendedHandler {
                 client.portal_store().rm_portal(portal_name);
                 client
                     .session_extensions()
-                    .get_or_insert_with(PythonPortals::default)
-                    .0
+                    .get::<Arc<PythonPortals>>()
+                    .expect("startup installed connection resources")
+                    .portals
                     .lock()
                     .unwrap()
                     .insert(
@@ -490,10 +553,10 @@ impl PgExtendedQueryHandler for PyExtendedHandler {
         if matches!(client.transaction_status(), TransactionStatus::Idle) {
             let portal_names = client
                 .session_extensions()
-                .get::<PythonPortals>()
+                .get::<Arc<PythonPortals>>()
                 .map(|portals| {
                     portals
-                        .0
+                        .portals
                         .lock()
                         .unwrap()
                         .keys()

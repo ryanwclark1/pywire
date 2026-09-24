@@ -621,6 +621,58 @@ async def test_unnamed_statement_replacement_closes_dependent_portals():
             await writer.wait_closed()
 
 
+@pytest.mark.parametrize("disconnect", ["socket", "server"])
+async def test_extended_resources_close_on_disconnect(disconnect: str):
+    closed: list[tuple[str, str]] = []
+    done = asyncio.Event()
+
+    class Extended(query.ExtendedQueryHandler):
+        async def parse_statement(self, name, q, parameter_types):
+            return query.PreparedStatement(name, q, parameter_types)
+
+        async def describe_statement(self, statement):
+            return query.DescribeStatementResponse([], [])
+
+        async def bind_portal(self, name, statement, parameters, parameter_formats, result_formats):
+            return query.Portal(name, statement)
+
+        async def describe_portal(self, portal):
+            return query.DescribePortalResponse([])
+
+        async def do_query(self, portal, max_rows):
+            return query.Response.empty()
+
+        async def close_portal(self, name):
+            closed.append(("portal", name))
+
+        async def close_statement(self, name):
+            closed.append(("statement", name))
+            done.set()
+
+    async with _running_server(_DummyHandler(), extended=Extended()) as port:
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        writer.write(messages.Startup(parameters={"user": "tester"}).encode())
+        await writer.drain()
+        await _await_with_data(reader)
+        writer.write(
+            _frontend_message(b"P", b"s1\x00SELECT 1\x00\x00\x00")
+            + _frontend_message(b"B", b"p1\x00s1\x00" + b"\x00" * 6)
+            + _frontend_message(b"H")
+        )
+        await writer.drain()
+        await _await_with_data(reader)
+        assert closed == []
+        if disconnect == "socket":
+            writer.close()
+            await writer.wait_closed()
+            await asyncio.wait_for(done.wait(), 2)
+    if disconnect == "server":
+        await asyncio.wait_for(done.wait(), 2)
+        writer.close()
+        await writer.wait_closed()
+    assert closed == [("portal", "p1"), ("statement", "s1")]
+
+
 async def test_extended_query_preserves_custom_parameter_oid():
     seen: list[int] = []
 

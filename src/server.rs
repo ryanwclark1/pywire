@@ -57,7 +57,7 @@ use tokio::task::JoinSet;
 
 use crate::auth::{PyAuthSource, PyLoginInfo};
 use crate::errors::py_err_to_pywire;
-use crate::extended::PyExtendedHandler;
+use crate::extended::{PyExtendedHandler, PythonPortals};
 use crate::query::PyQueryHandler;
 
 // ---------- SimpleQueryHandler adapter --------------------------------
@@ -143,6 +143,7 @@ struct PyStartupHandler {
     inner: PyStartupInner,
     require_tls: bool,
     session_factory: Option<Arc<Py<PyAny>>>,
+    resources: Arc<PythonPortals>,
 }
 
 enum PyStartupInner {
@@ -201,6 +202,14 @@ impl StartupHandler for PyStartupHandler {
             PyStartupInner::Cleartext(h) => h.on_startup(client, message).await,
             PyStartupInner::Scram(h) => h.on_startup(client, message).await,
         }?;
+        if matches!(client.state(), PgWireConnectionState::ReadyForQuery)
+            && client
+                .session_extensions()
+                .get::<Arc<PythonPortals>>()
+                .is_none()
+        {
+            client.session_extensions().insert(self.resources.clone());
+        }
         if matches!(client.state(), PgWireConnectionState::ReadyForQuery)
             && client.session_extensions().get::<PySession>().is_none()
         {
@@ -272,7 +281,7 @@ struct HandlerConfig {
 }
 
 impl HandlerConfig {
-    fn build(&self) -> PgWireResult<PyServerHandlers> {
+    fn build(&self, resources: Arc<PythonPortals>) -> PgWireResult<PyServerHandlers> {
         let startup = match self.auth_method {
             AuthMethod::Trust => PyStartupInner::Noop(ManagedNoopStartup {
                 manager: self.manager.clone(),
@@ -309,6 +318,7 @@ impl HandlerConfig {
                 inner: startup,
                 require_tls: self.require_tls,
                 session_factory: self.session_factory.clone(),
+                resources,
             }),
             extended_query: self.extended_query.clone(),
             cancel: Arc::new(DefaultCancelHandler::new(self.manager.clone())),
@@ -449,15 +459,18 @@ fn serve<'py>(
                     pyo3::exceptions::PyOSError::new_err(format!("accept failed: {e}")))?, // LCOV_EXCL_LINE
                 _ = connections.join_next(), if !connections.is_empty() => continue,
             };
+            let locals = task_locals.clone();
+            let resources = Arc::new(PythonPortals::new(locals.clone()));
             let handlers = config
-                .build()
+                .build(resources.clone())
                 .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))?;
             let handlers = Arc::new(handlers);
             let tls_acceptor = tls_acceptor.clone();
-            let locals = task_locals.clone();
             connections.spawn(async move {
                 let _ = pyo3_tokio::scope(locals, async move {
-                    process_socket(sock, tls_acceptor, handlers).await
+                    let result = process_socket(sock, tls_acceptor, handlers).await;
+                    resources.cleanup().await;
+                    result
                 })
                 .await;
             });
