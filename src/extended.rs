@@ -212,7 +212,11 @@ impl PyExtendedHandler {
         })
     }
 
-    async fn close_portal<C: ClientInfo>(&self, client: &C, name: &str) -> PgWireResult<()> {
+    pub(crate) async fn close_portal<C: ClientInfo>(
+        &self,
+        client: &C,
+        name: &str,
+    ) -> PgWireResult<()> {
         let Some(portals) = client.session_extensions().get::<Arc<PythonPortals>>() else {
             return Ok(()); // LCOV_EXCL_LINE - startup always installs connection resources
         };
@@ -229,6 +233,32 @@ impl PyExtendedHandler {
             call_python(&instance, "close_portal", name).await?;
         }
         portals.portals.lock().unwrap().remove(name);
+        Ok(())
+    }
+
+    pub(crate) async fn close_all_portals<C>(&self, client: &mut C) -> PgWireResult<()>
+    where
+        C: ClientInfo + ClientPortalStore,
+        C::PortalStore: PortalStore,
+    {
+        let portal_names = client
+            .session_extensions()
+            .get::<Arc<PythonPortals>>()
+            .map(|portals| {
+                portals
+                    .portals
+                    .lock()
+                    .unwrap()
+                    .keys()
+                    .cloned()
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        for portal_name in portal_names {
+            self.close_portal(client, &portal_name).await?;
+            client.portal_store().rm_portal(&portal_name);
+        }
+        client.portal_store().rm_portal(DEFAULT_NAME);
         Ok(())
     }
 
@@ -469,6 +499,13 @@ impl PgExtendedQueryHandler for PyExtendedHandler {
     {
         let statement_name = message.statement_name.as_deref().unwrap_or(DEFAULT_NAME);
         let portal_name = message.portal_name.as_deref().unwrap_or(DEFAULT_NAME);
+        if portal_name != DEFAULT_NAME && client.portal_store().get_portal(portal_name).is_some() {
+            return Err(PgWireError::UserError(Box::new(ErrorInfo::new(
+                "ERROR".to_owned(),
+                "42P03".to_owned(),
+                format!("portal {portal_name:?} already exists"),
+            ))));
+        }
         let format_count = message.parameter_format_codes.len();
         if format_count > 1 && format_count != message.parameters.len() {
             return Err(PgWireError::UserError(Box::new(ErrorInfo::new(
@@ -574,24 +611,7 @@ impl PgExtendedQueryHandler for PyExtendedHandler {
         PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
     {
         if matches!(client.transaction_status(), TransactionStatus::Idle) {
-            let portal_names = client
-                .session_extensions()
-                .get::<Arc<PythonPortals>>()
-                .map(|portals| {
-                    portals
-                        .portals
-                        .lock()
-                        .unwrap()
-                        .keys()
-                        .cloned()
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
-            for portal_name in portal_names {
-                self.close_portal(client, &portal_name).await?;
-                client.portal_store().rm_portal(&portal_name);
-            }
-            client.portal_store().rm_portal(DEFAULT_NAME);
+            self.close_all_portals(client).await?;
         }
         client
             .send(PgWireBackendMessage::ReadyForQuery(ReadyForQuery::new(

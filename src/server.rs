@@ -44,6 +44,7 @@ use pgwire::api::{
     DEFAULT_NAME,
 };
 use pgwire::error::{PgWireError, PgWireResult};
+use pgwire::messages::response::TransactionStatus;
 use pgwire::messages::simplequery::Query;
 use pgwire::messages::{PgWireBackendMessage, PgWireFrontendMessage};
 use pgwire::tokio::process_socket;
@@ -81,8 +82,14 @@ impl PgSimpleQueryHandler for PyServerSimpleQueryHandler {
         if !matches!(client.state(), PgWireConnectionState::ReadyForQuery) {
             return Err(PgWireError::NotReadyForQuery);
         }
+        self.extended.close_portal(client, DEFAULT_NAME).await?;
+        client.portal_store().rm_portal(DEFAULT_NAME);
         self.extended.close_statement(client, DEFAULT_NAME).await?;
-        self._on_query(client, query).await
+        let result = self._on_query(client, query).await;
+        if matches!(client.transaction_status(), TransactionStatus::Idle) {
+            self.extended.close_all_portals(client).await?;
+        }
+        result
     }
 
     async fn do_query<C>(&self, client: &mut C, query: &str) -> PgWireResult<Vec<Response>>

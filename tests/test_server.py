@@ -440,9 +440,14 @@ async def test_extended_query_binary_stream_and_portal_suspension():
             first_portal = bound_portals["p1"]
             writer.write(_frontend_message(b"B", bind) + _frontend_message(b"H"))
             await writer.drain()
+            duplicate = await _await_with_data(reader)
+            assert b"42P03" in duplicate
+            assert b"2\x00\x00\x00\x04" not in duplicate  # no BindComplete
+            assert bound_portals["p1"] is first_portal
+            writer.write(_frontend_message(b"S"))
+            await writer.drain()
             await _await_with_data(reader)
-            assert bound_portals["p1"] is not first_portal
-            assert calls[-2:] == [("close_portal", "p1"), ("bind", ([1], [1]))]
+            assert calls[-1] == ("close_portal", "p1")
             writer.write(_frontend_message(b"C", b"Ss1\x00") + _frontend_message(b"S"))
             await writer.drain()
             assert b"3" in await _await_with_data(reader)
@@ -763,6 +768,117 @@ async def test_transaction_status_preserves_portal_until_commit():
             await writer.drain()
             assert b"Z\x00\x00\x00\x05I" in await _await_with_data(reader)
             assert sorted(closed) == ["p_begin", "p_commit", "p_select"]
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+
+async def test_simple_query_closes_unnamed_portal_bound_to_named_statement():
+    closed: list[str] = []
+
+    class Simple(query.SimpleQueryHandler):
+        async def do_query(self, q):
+            return [query.Response.execution(q)]
+
+    class Extended(query.ExtendedQueryHandler):
+        async def parse_statement(self, name, q, parameter_types):
+            return query.PreparedStatement(name, q, parameter_types)
+
+        async def describe_statement(self, statement):
+            return query.DescribeStatementResponse([], [])
+
+        async def bind_portal(self, name, statement, parameters, parameter_formats, result_formats):
+            return query.Portal(name, statement)
+
+        async def describe_portal(self, portal):
+            return query.DescribePortalResponse([])
+
+        async def do_query(self, portal, max_rows):
+            return query.Response.empty()
+
+        async def close_portal(self, name):
+            closed.append(name)
+
+    async with _running_server(Simple(), extended=Extended()) as port:
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        try:
+            writer.write(messages.Startup(parameters={"user": "tester"}).encode())
+            await writer.drain()
+            await _await_with_data(reader)
+            writer.write(messages.Query("BEGIN").encode())
+            await writer.drain()
+            assert b"Z\x00\x00\x00\x05T" in await _await_with_data(reader)
+            writer.write(
+                _frontend_message(b"P", b"s1\x00SELECT 1\x00\x00\x00")
+                + _frontend_message(b"B", b"\x00s1\x00" + b"\x00" * 6)
+                + _frontend_message(b"S")
+            )
+            await writer.drain()
+            assert b"Z\x00\x00\x00\x05T" in await _await_with_data(reader)
+            assert closed == []
+            writer.write(
+                _frontend_message(b"B", b"\x00s1\x00" + b"\x00" * 6)
+                + _frontend_message(b"S")
+            )
+            await writer.drain()
+            assert b"Z\x00\x00\x00\x05T" in await _await_with_data(reader)
+            assert closed == ["POSTGRESQL_DEFAULT_NAME"]
+            writer.write(messages.Query("SELECT 2").encode())
+            await writer.drain()
+            assert b"Z\x00\x00\x00\x05T" in await _await_with_data(reader)
+            assert closed == ["POSTGRESQL_DEFAULT_NAME", "POSTGRESQL_DEFAULT_NAME"]
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+
+async def test_simple_query_commit_closes_named_portals():
+    closed: list[str] = []
+
+    class Simple(query.SimpleQueryHandler):
+        async def do_query(self, q):
+            return [query.Response.execution(q)]
+
+    class Extended(query.ExtendedQueryHandler):
+        async def parse_statement(self, name, q, parameter_types):
+            return query.PreparedStatement(name, q, parameter_types)
+
+        async def describe_statement(self, statement):
+            return query.DescribeStatementResponse([], [])
+
+        async def bind_portal(self, name, statement, parameters, parameter_formats, result_formats):
+            return query.Portal(name, statement)
+
+        async def describe_portal(self, portal):
+            return query.DescribePortalResponse([])
+
+        async def do_query(self, portal, max_rows):
+            return query.Response.empty()
+
+        async def close_portal(self, name):
+            closed.append(name)
+
+    async with _running_server(Simple(), extended=Extended()) as port:
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        try:
+            writer.write(messages.Startup(parameters={"user": "tester"}).encode())
+            await writer.drain()
+            await _await_with_data(reader)
+            writer.write(messages.Query("BEGIN").encode())
+            await writer.drain()
+            assert b"Z\x00\x00\x00\x05T" in await _await_with_data(reader)
+            writer.write(
+                _frontend_message(b"P", b"s1\x00SELECT 1\x00\x00\x00")
+                + _frontend_message(b"B", b"p1\x00s1\x00" + b"\x00" * 6)
+                + _frontend_message(b"S")
+            )
+            await writer.drain()
+            assert b"Z\x00\x00\x00\x05T" in await _await_with_data(reader)
+            assert closed == []
+            writer.write(messages.Query("COMMIT").encode())
+            await writer.drain()
+            assert b"Z\x00\x00\x00\x05I" in await _await_with_data(reader)
+            assert closed == ["p1"]
         finally:
             writer.close()
             await writer.wait_closed()
