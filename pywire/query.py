@@ -61,8 +61,8 @@ class SimpleQueryHandler(abc.ABC):
 class PreparedStatement:
     """A parsed but not-yet-bound statement.
 
-    `name` is the empty string for unnamed statements (per the
-    PostgreSQL protocol). `parameter_types` is a list of PostgreSQL
+    For unnamed statements, the adapter passes pgwire's
+    `POSTGRESQL_DEFAULT_NAME` marker as `name`. `parameter_types` is a list of PostgreSQL
     type OIDs — `0` means "type not specified, infer from context".
     """
 
@@ -75,6 +75,7 @@ class PreparedStatement:
 class Portal:
     """A prepared statement bound to a parameter set.
 
+    Unnamed portals use pgwire's `POSTGRESQL_DEFAULT_NAME` marker as `name`.
     `parameters` is a list of `bytes | None` — one entry per parameter,
     text-format encoded, or `None` for SQL NULL.
     `parameter_formats` and `result_formats` are lists of `0` (text) or

@@ -165,6 +165,44 @@ impl PyExtendedHandler {
         portals.0.lock().unwrap().remove(name);
         Ok(())
     }
+
+    pub(crate) async fn close_statement<C>(&self, client: &mut C, name: &str) -> PgWireResult<()>
+    where
+        C: ClientInfo + ClientPortalStore,
+        C::PortalStore: PortalStore,
+    {
+        let portal_names = client
+            .session_extensions()
+            .get::<PythonPortals>()
+            .map(|portals| {
+                portals
+                    .0
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|(_, entry)| entry.statement_name == name)
+                    .map(|(portal_name, _)| portal_name.clone())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        for portal_name in portal_names {
+            self.close_portal(client, &portal_name).await?;
+            client.portal_store().rm_portal(&portal_name);
+        }
+        if matches!(
+            client.portal_store().get_statement(name),
+            Some(Entry::Value(_))
+        ) {
+            // A stored Python statement always has a configured callback.
+            // LCOV_EXCL_START
+            if let Some(instance) = self.instance_for(client) {
+                call_python(&instance, "close_statement", name).await?;
+            }
+            // LCOV_EXCL_STOP
+        }
+        client.portal_store().rm_statement(name);
+        Ok(())
+    }
 }
 
 async fn call_python(instance: &Py<PyAny>, method: &str, name: &str) -> PgWireResult<()> {
@@ -467,33 +505,7 @@ impl PgExtendedQueryHandler for PyExtendedHandler {
         let name = message.name.as_deref().unwrap_or(DEFAULT_NAME);
         match message.target_type {
             TARGET_TYPE_BYTE_STATEMENT => {
-                let portal_names = client
-                    .session_extensions()
-                    .get::<PythonPortals>()
-                    .map(|portals| {
-                        portals
-                            .0
-                            .lock()
-                            .unwrap()
-                            .iter()
-                            .filter(|(_, entry)| entry.statement_name == name)
-                            .map(|(portal_name, _)| portal_name.clone())
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_default();
-                for portal_name in portal_names {
-                    self.close_portal(client, &portal_name).await?;
-                    client.portal_store().rm_portal(&portal_name);
-                }
-                if matches!(
-                    client.portal_store().get_statement(name),
-                    Some(Entry::Value(_))
-                ) {
-                    if let Some(instance) = self.instance_for(client) {
-                        call_python(&instance, "close_statement", name).await?;
-                    }
-                }
-                client.portal_store().rm_statement(name);
+                self.close_statement(client, name).await?;
             }
             TARGET_TYPE_BYTE_PORTAL => {
                 self.close_portal(client, name).await?;

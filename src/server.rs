@@ -38,10 +38,13 @@ use pgwire::api::query::{
     ExtendedQueryHandler as PgExtendedQueryHandler, SimpleQueryHandler as PgSimpleQueryHandler,
 };
 use pgwire::api::results::Response;
+use pgwire::api::store::PortalStore;
 use pgwire::api::{
     ClientInfo, ClientPortalStore, ConnectionManager, PgWireConnectionState, PgWireServerHandlers,
+    DEFAULT_NAME,
 };
 use pgwire::error::{PgWireError, PgWireResult};
+use pgwire::messages::simplequery::Query;
 use pgwire::messages::{PgWireBackendMessage, PgWireFrontendMessage};
 use pgwire::tokio::process_socket;
 use pgwire::tokio::tokio_rustls::rustls::ServerConfig;
@@ -63,10 +66,25 @@ use crate::query::PyQueryHandler;
 /// Python `PyQueryHandler`.
 struct PyServerSimpleQueryHandler {
     inner: Arc<PyQueryHandler>,
+    extended: Arc<PyExtendedHandler>,
 }
 
 #[async_trait]
 impl PgSimpleQueryHandler for PyServerSimpleQueryHandler {
+    async fn on_query<C>(&self, client: &mut C, query: Query) -> PgWireResult<()>
+    where
+        C: ClientInfo + ClientPortalStore + Sink<PgWireBackendMessage> + Unpin + Send + Sync,
+        C::PortalStore: PortalStore,
+        C::Error: Debug,
+        PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
+    {
+        if !matches!(client.state(), PgWireConnectionState::ReadyForQuery) {
+            return Err(PgWireError::NotReadyForQuery);
+        }
+        self.extended.close_statement(client, DEFAULT_NAME).await?;
+        self._on_query(client, query).await
+    }
+
     async fn do_query<C>(&self, client: &mut C, query: &str) -> PgWireResult<Vec<Response>>
     where
         C: ClientInfo + ClientPortalStore + Sink<PgWireBackendMessage> + Unpin + Send + Sync,
@@ -394,12 +412,14 @@ fn serve<'py>(
         }
     };
     let simple = Arc::new(PyQueryHandler::new(simple_query.unbind()));
+    let extended = Arc::new(PyExtendedHandler::new(extended.map(Bound::unbind)));
     let manager = Arc::new(ConnectionManager::new());
     let config = Arc::new(HandlerConfig {
         simple_query: Arc::new(PyServerSimpleQueryHandler {
             inner: simple.clone(),
+            extended: extended.clone(),
         }),
-        extended_query: Arc::new(PyExtendedHandler::new(extended.map(Bound::unbind))),
+        extended_query: extended,
         auth: auth.map(|value| Arc::new(PyAuthSource::new(value.unbind()))),
         auth_method,
         manager,

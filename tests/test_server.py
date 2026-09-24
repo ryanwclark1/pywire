@@ -541,6 +541,60 @@ async def test_empty_extended_statement_skips_python_parser(sql: str):
             await writer.wait_closed()
 
 
+async def test_simple_query_closes_portals_from_unnamed_statement():
+    closed: list[tuple[str, str]] = []
+    parsed_names: list[str] = []
+
+    class Extended(query.ExtendedQueryHandler):
+        async def parse_statement(self, name, q, parameter_types):
+            parsed_names.append(name)
+            return query.PreparedStatement(name, q, parameter_types)
+
+        async def describe_statement(self, statement):
+            return query.DescribeStatementResponse([], [])
+
+        async def bind_portal(self, name, statement, parameters, parameter_formats, result_formats):
+            return query.Portal(name, statement)
+
+        async def describe_portal(self, portal):
+            return query.DescribePortalResponse([])
+
+        async def do_query(self, portal, max_rows):
+            return query.Response.empty()
+
+        async def close_portal(self, name):
+            closed.append(("portal", name))
+
+        async def close_statement(self, name):
+            closed.append(("statement", name))
+
+    async with _running_server(_DummyHandler(), extended=Extended()) as port:
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        try:
+            writer.write(messages.Startup(parameters={"user": "tester"}).encode())
+            await writer.drain()
+            await _await_with_data(reader)
+            writer.write(
+                _frontend_message(b"P", b"\x00SELECT 1\x00\x00\x00")
+                + _frontend_message(b"B", b"p1\x00\x00\x00\x00\x00\x00\x00\x00")
+                + _frontend_message(b"S")
+            )
+            await writer.drain()
+            await _await_with_data(reader)
+            writer.write(_frontend_message(b"Q", b"SELECT 2\x00"))
+            await writer.drain()
+            await _await_with_data(reader)
+            assert closed == [("portal", "p1"), ("statement", parsed_names[0])]
+            writer.write(
+                _frontend_message(b"E", b"p1\x00\x00\x00\x00\x00") + _frontend_message(b"S")
+            )
+            await writer.drain()
+            assert b"E" in await _await_with_data(reader)
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+
 async def test_extended_query_preserves_custom_parameter_oid():
     seen: list[int] = []
 
