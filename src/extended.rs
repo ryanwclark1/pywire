@@ -355,6 +355,18 @@ impl PgExtendedQueryHandler for PyExtendedHandler {
                 ),
             ))));
         }
+        if let Some(code) = message
+            .parameter_format_codes
+            .iter()
+            .chain(&message.result_column_format_codes)
+            .find(|code| **code != 0 && **code != 1)
+        {
+            return Err(PgWireError::UserError(Box::new(ErrorInfo::new(
+                "ERROR".to_owned(),
+                "08P01".to_owned(),
+                format!("bind message has invalid format code {code}"),
+            ))));
+        }
         match client.portal_store().get_statement(statement_name) {
             Some(Entry::Value(statement)) => {
                 let portal = Portal::try_new(&message, statement)?;
