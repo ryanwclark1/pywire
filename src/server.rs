@@ -95,6 +95,9 @@ impl PgSimpleQueryHandler for PyServerSimpleQueryHandler {
     async fn do_query<C>(&self, client: &mut C, query: &str) -> PgWireResult<Vec<Response>>
     where
         C: ClientInfo + ClientPortalStore + Sink<PgWireBackendMessage> + Unpin + Send + Sync,
+        C::PortalStore: PortalStore,
+        C::Error: Debug,
+        PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
     {
         let session = client.session_extensions().get::<PySession>();
         let py_responses = if let Some(session) = session {
@@ -103,7 +106,14 @@ impl PgSimpleQueryHandler for PyServerSimpleQueryHandler {
             self.inner.do_query(query).await
         }
         .map_err(|err| Python::attach(|py| py_err_to_pywire(py, err)))?;
-        Ok(py_responses.into_iter().map(|r| r.into_pg()).collect())
+        let responses: Vec<Response> = py_responses.into_iter().map(|r| r.into_pg()).collect();
+        if responses
+            .iter()
+            .any(|response| matches!(response, Response::TransactionEnd(_)))
+        {
+            self.extended.close_all_portals(client).await?;
+        }
+        Ok(responses)
     }
 }
 

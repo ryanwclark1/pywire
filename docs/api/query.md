@@ -30,10 +30,16 @@ response stream. Construct via the classmethod factories:
 | Factory                                                              | Use it when                                                       |
 | -------------------------------------------------------------------- | ----------------------------------------------------------------- |
 | `Response.empty()`                                                   | The client sent an empty query (just `;`).                        |
-| `Response.execution(command, *, oid=None, rows=None)`                | DML / DDL completion (INSERT, UPDATE, DELETE, BEGIN, COMMIT, …).  |
+| `Response.execution(command, *, oid=None, rows=None, transaction=None)` | Command completion; set `transaction="start"` or `"end"` when it changes transaction state. |
 | `Response.query(fields, rows, *, command_tag="SELECT")`              | Rows-returning result (SELECT, RETURNING, …).                     |
 | `Response.stream(fields, rows, *, command_tag="SELECT")`             | Async row stream with wire-level backpressure.                    |
 | `Response.error(info)`                                               | A statement-level error with structured fields.                   |
+
+For transaction commands, pass `transaction="start"` for `BEGIN` or
+`START TRANSACTION`, and `transaction="end"` for a full `COMMIT` or
+`ROLLBACK`. Leave it unset for `ROLLBACK TO SAVEPOINT`, which reports
+the `ROLLBACK` command tag but keeps the transaction open. The same
+flag works for each response in a multi-statement simple query.
 
 The `kind` property returns one of `"empty"`, `"execution"`, `"query"`,
 `"stream"`, `"error"` and a `repr()` that names the constructor.

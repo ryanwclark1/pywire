@@ -337,6 +337,14 @@ def _frontend_message(kind: bytes, body: bytes = b"") -> bytes:
     return kind + (len(body) + 4).to_bytes(4, "big") + body
 
 
+def _transaction_response(command: str) -> query.Response:
+    if command == "BEGIN":
+        return query.Response.execution(command, transaction="start")
+    if command in {"COMMIT", "ROLLBACK"}:
+        return query.Response.execution(command, transaction="end")
+    return query.Response.execution(command)
+
+
 async def test_extended_query_binary_stream_and_portal_suspension():
     calls: list[tuple[str, object]] = []
     bound_portals: dict[str, query.Portal] = {}
@@ -736,7 +744,7 @@ async def test_transaction_status_preserves_portal_until_commit():
             return query.DescribePortalResponse([])
 
         async def do_query(self, portal, max_rows):
-            return query.Response.execution(portal.statement.query)
+            return _transaction_response(portal.statement.query)
 
         async def close_portal(self, name):
             closed.append(name)
@@ -792,7 +800,7 @@ async def test_simple_query_closes_unnamed_portal_bound_to_named_statement():
 
     class Simple(query.SimpleQueryHandler):
         async def do_query(self, q):
-            return [query.Response.execution(q)]
+            return [_transaction_response(q)]
 
     class Extended(query.ExtendedQueryHandler):
         async def parse_statement(self, name, q, parameter_types):
@@ -862,7 +870,7 @@ async def test_idle_commit_expires_portals_before_pipelined_execute():
             return query.DescribePortalResponse([])
 
         async def do_query(self, portal, max_rows):
-            return query.Response.execution(portal.statement.query)
+            return _transaction_response(portal.statement.query)
 
         async def close_portal(self, name):
             closed.append(name)
@@ -904,7 +912,7 @@ async def test_simple_query_commit_closes_named_portals():
 
     class Simple(query.SimpleQueryHandler):
         async def do_query(self, q):
-            return [query.Response.execution(q)]
+            return [_transaction_response(q)]
 
     class Extended(query.ExtendedQueryHandler):
         async def parse_statement(self, name, q, parameter_types):
@@ -946,6 +954,141 @@ async def test_simple_query_commit_closes_named_portals():
             await writer.drain()
             assert b"Z\x00\x00\x00\x05I" in await _await_with_data(reader)
             assert closed == ["p1"]
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+
+async def test_rollback_to_savepoint_keeps_transaction_portals():
+    closed: list[str] = []
+
+    class Simple(query.SimpleQueryHandler):
+        async def do_query(self, q):
+            return [_transaction_response(q)]
+
+    class Extended(query.ExtendedQueryHandler):
+        async def parse_statement(self, name, q, parameter_types):
+            return query.PreparedStatement(name, q, parameter_types)
+
+        async def describe_statement(self, statement):
+            return query.DescribeStatementResponse([], [])
+
+        async def bind_portal(self, name, statement, parameters, parameter_formats, result_formats):
+            return query.Portal(name, statement)
+
+        async def describe_portal(self, portal):
+            return query.DescribePortalResponse([])
+
+        async def do_query(self, portal, max_rows):
+            if portal.statement.query.startswith("ROLLBACK TO"):
+                return query.Response.execution("ROLLBACK")
+            return query.Response.execution("SELECT")
+
+        async def close_portal(self, name):
+            closed.append(name)
+
+    async with _running_server(Simple(), extended=Extended()) as port:
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        try:
+            writer.write(messages.Startup(parameters={"user": "tester"}).encode())
+            await writer.drain()
+            await _await_with_data(reader)
+            writer.write(messages.Query("BEGIN").encode())
+            await writer.drain()
+            assert b"Z\x00\x00\x00\x05T" in await _await_with_data(reader)
+            writer.write(
+                _frontend_message(b"P", b"s1\x00SELECT 1\x00\x00\x00")
+                + _frontend_message(b"B", b"p1\x00s1\x00" + b"\x00" * 6)
+                + _frontend_message(b"P", b"save\x00ROLLBACK TO SAVEPOINT s\x00\x00\x00")
+                + _frontend_message(b"B", b"p_save\x00save\x00" + b"\x00" * 6)
+                + _frontend_message(b"E", b"p_save\x00\x00\x00\x00\x00")
+                + _frontend_message(b"S")
+            )
+            await writer.drain()
+            assert b"Z\x00\x00\x00\x05T" in await _await_with_data(reader)
+            assert closed == []
+            writer.write(
+                _frontend_message(b"E", b"p1\x00\x00\x00\x00\x00") + _frontend_message(b"S")
+            )
+            await writer.drain()
+            response = await _await_with_data(reader)
+            assert b"Z\x00\x00\x00\x05T" in response
+            assert b"SELECT" in response
+            writer.write(messages.Query("COMMIT").encode())
+            await writer.drain()
+            assert b"Z\x00\x00\x00\x05I" in await _await_with_data(reader)
+            assert sorted(closed) == ["p1", "p_save"]
+            writer.write(
+                _frontend_message(b"C", b"Ss1\x00")
+                + _frontend_message(b"C", b"Ssave\x00")
+                + _frontend_message(b"S")
+            )
+            await writer.drain()
+            await _await_with_data(reader)
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+
+async def test_simple_query_batch_closes_portals_at_intermediate_commit():
+    closed: list[str] = []
+
+    class Simple(query.SimpleQueryHandler):
+        async def do_query(self, q):
+            if q == "COMMIT; BEGIN":
+                return [
+                    query.Response.execution("COMMIT", transaction="end"),
+                    query.Response.execution("BEGIN", transaction="start"),
+                ]
+            return [_transaction_response(q)]
+
+    class Extended(query.ExtendedQueryHandler):
+        async def parse_statement(self, name, q, parameter_types):
+            return query.PreparedStatement(name, q, parameter_types)
+
+        async def describe_statement(self, statement):
+            return query.DescribeStatementResponse([], [])
+
+        async def bind_portal(self, name, statement, parameters, parameter_formats, result_formats):
+            return query.Portal(name, statement)
+
+        async def describe_portal(self, portal):
+            return query.DescribePortalResponse([])
+
+        async def do_query(self, portal, max_rows):
+            return query.Response.execution("SELECT")
+
+        async def close_portal(self, name):
+            closed.append(name)
+
+    async with _running_server(Simple(), extended=Extended()) as port:
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        try:
+            writer.write(messages.Startup(parameters={"user": "tester"}).encode())
+            await writer.drain()
+            await _await_with_data(reader)
+            writer.write(messages.Query("BEGIN").encode())
+            await writer.drain()
+            assert b"Z\x00\x00\x00\x05T" in await _await_with_data(reader)
+            writer.write(
+                _frontend_message(b"P", b"s1\x00SELECT 1\x00\x00\x00")
+                + _frontend_message(b"B", b"p1\x00s1\x00" + b"\x00" * 6)
+                + _frontend_message(b"S")
+            )
+            await writer.drain()
+            assert b"Z\x00\x00\x00\x05T" in await _await_with_data(reader)
+            writer.write(messages.Query("COMMIT; BEGIN").encode())
+            await writer.drain()
+            assert b"Z\x00\x00\x00\x05T" in await _await_with_data(reader)
+            assert closed == ["p1"]
+            writer.write(
+                _frontend_message(b"E", b"p1\x00\x00\x00\x00\x00") + _frontend_message(b"S")
+            )
+            await writer.drain()
+            assert b"p1" in await _await_with_data(reader)
+            writer.write(_frontend_message(b"C", b"Ss1\x00") + _frontend_message(b"S"))
+            await writer.drain()
+            await _await_with_data(reader)
         finally:
             writer.close()
             await writer.wait_closed()
