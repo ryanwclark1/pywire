@@ -115,17 +115,6 @@ pub(crate) struct PySession {
     pub(crate) instance: Py<PyAny>,
 }
 
-impl Drop for PySession {
-    fn drop(&mut self) {
-        Python::attach(|py| {
-            let instance = self.instance.bind(py);
-            if instance.hasattr("close").unwrap_or(false) {
-                let _ = instance.call_method0("close");
-            }
-        });
-    }
-}
-
 #[async_trait]
 impl PgAuthSource for PyAuthSourceWrapper {
     async fn get_password(&self, login: &LoginInfo) -> PgWireResult<pgwire::api::auth::Password> {
@@ -224,6 +213,8 @@ impl StartupHandler for PyStartupHandler {
                 let instance = future
                     .await
                     .map_err(|error| Python::attach(|py| py_err_to_pywire(py, error)))?;
+                self.resources
+                    .set_session(Python::attach(|py| instance.clone_ref(py)));
                 client.session_extensions().insert(PySession { instance });
             }
         }

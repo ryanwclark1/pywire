@@ -50,6 +50,7 @@ pub struct PyExtendedHandler {
 pub(crate) struct PythonPortals {
     portals: Mutex<HashMap<String, PortalEntry>>,
     statements: Mutex<HashMap<String, Py<PyAny>>>,
+    session: Mutex<Option<Py<PyAny>>>,
     locals: pyo3_async_runtimes::TaskLocals,
 }
 
@@ -68,14 +69,20 @@ impl PythonPortals {
         Self {
             portals: Mutex::new(HashMap::new()),
             statements: Mutex::new(HashMap::new()),
+            session: Mutex::new(None),
             locals,
         }
+    }
+
+    pub(crate) fn set_session(&self, instance: Py<PyAny>) {
+        *self.session.lock().unwrap() = Some(instance);
     }
 
     pub(crate) async fn cleanup(&self) {
         let portals = std::mem::take(&mut *self.portals.lock().unwrap());
         let statements = std::mem::take(&mut *self.statements.lock().unwrap());
-        cleanup_entries(portals, statements).await;
+        let session = self.session.lock().unwrap().take();
+        cleanup_entries(portals, statements, session).await;
     }
 }
 
@@ -83,13 +90,14 @@ impl Drop for PythonPortals {
     fn drop(&mut self) {
         let portals = std::mem::take(self.portals.get_mut().unwrap());
         let statements = std::mem::take(self.statements.get_mut().unwrap());
-        if portals.is_empty() && statements.is_empty() {
+        let session = self.session.get_mut().unwrap().take();
+        if portals.is_empty() && statements.is_empty() && session.is_none() {
             return;
         }
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             let locals = self.locals.clone();
             handle.spawn(pyo3_tokio::scope(locals, async move {
-                cleanup_entries(portals, statements).await;
+                cleanup_entries(portals, statements, session).await;
             }));
         } // LCOV_EXCL_LINE - closing region emitted separately by llvm-cov
     }
@@ -98,6 +106,7 @@ impl Drop for PythonPortals {
 async fn cleanup_entries(
     portals: HashMap<String, PortalEntry>,
     statements: HashMap<String, Py<PyAny>>,
+    session: Option<Py<PyAny>>,
 ) {
     for (name, entry) in portals {
         if let Some(bound) = entry.bound {
@@ -106,6 +115,14 @@ async fn cleanup_entries(
     }
     for (name, instance) in statements {
         let _ = call_python(&instance, "close_statement", &name).await;
+    }
+    if let Some(instance) = session {
+        Python::attach(|py| {
+            let instance = instance.bind(py);
+            if instance.hasattr("close").unwrap_or(false) {
+                let _ = instance.call_method0("close");
+            }
+        });
     }
 }
 
@@ -410,6 +427,12 @@ impl PgExtendedQueryHandler for PyExtendedHandler {
             .collect::<Vec<_>>();
         if name == DEFAULT_NAME {
             self.close_statement(client, &name).await?;
+        } else if client.portal_store().get_statement(&name).is_some() {
+            return Err(PgWireError::UserError(Box::new(ErrorInfo::new(
+                "ERROR".to_owned(),
+                "42P05".to_owned(),
+                format!("prepared statement {name:?} already exists"),
+            ))));
         }
         if is_empty_query(&message.query) {
             client.portal_store().put_empty_statement(&name);

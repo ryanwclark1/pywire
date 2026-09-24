@@ -298,6 +298,7 @@ impl PyResponse {
         match self.inner {
             ResponseInner::Empty => Response::EmptyQuery,
             ResponseInner::Execution { command, oid, rows } => {
+                let transaction_command = command.to_ascii_uppercase();
                 let mut tag = Tag::new(&command);
                 if let Some(oid) = oid {
                     tag = tag.with_oid(oid);
@@ -305,7 +306,11 @@ impl PyResponse {
                 if let Some(rows) = rows {
                     tag = tag.with_rows(rows);
                 }
-                Response::Execution(tag)
+                match transaction_command.as_str() {
+                    "BEGIN" | "START TRANSACTION" => Response::TransactionStart(tag),
+                    "COMMIT" | "END" | "ROLLBACK" | "ABORT" => Response::TransactionEnd(tag),
+                    _ => Response::Execution(tag),
+                }
             }
             ResponseInner::Query(q) => {
                 let pg_fields: Vec<PgFieldInfo> = q.fields.into_iter().map(Into::into).collect();
@@ -542,6 +547,30 @@ mod tests {
             },
         };
         assert!(matches!(r.into_pg(), Response::Execution(_)));
+    }
+
+    #[test]
+    fn transaction_execution_tags_update_wire_state() {
+        for command in ["BEGIN", "start transaction"] {
+            let response = PyResponse {
+                inner: ResponseInner::Execution {
+                    command: command.into(),
+                    oid: None,
+                    rows: None,
+                },
+            };
+            assert!(matches!(response.into_pg(), Response::TransactionStart(_)));
+        }
+        for command in ["COMMIT", "END", "ROLLBACK", "ABORT"] {
+            let response = PyResponse {
+                inner: ResponseInner::Execution {
+                    command: command.into(),
+                    oid: None,
+                    rows: None,
+                },
+            };
+            assert!(matches!(response.into_pg(), Response::TransactionEnd(_)));
+        }
     }
 
     #[test]
