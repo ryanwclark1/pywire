@@ -845,6 +845,60 @@ async def test_simple_query_closes_unnamed_portal_bound_to_named_statement():
             await writer.wait_closed()
 
 
+async def test_idle_commit_expires_portals_before_pipelined_execute():
+    closed: list[str] = []
+
+    class Extended(query.ExtendedQueryHandler):
+        async def parse_statement(self, name, q, parameter_types):
+            return query.PreparedStatement(name, q, parameter_types)
+
+        async def describe_statement(self, statement):
+            return query.DescribeStatementResponse([], [])
+
+        async def bind_portal(self, name, statement, parameters, parameter_formats, result_formats):
+            return query.Portal(name, statement)
+
+        async def describe_portal(self, portal):
+            return query.DescribePortalResponse([])
+
+        async def do_query(self, portal, max_rows):
+            return query.Response.execution(portal.statement.query)
+
+        async def close_portal(self, name):
+            closed.append(name)
+
+    async with _running_server(_DummyHandler(), extended=Extended()) as port:
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        try:
+            writer.write(messages.Startup(parameters={"user": "tester"}).encode())
+            await writer.drain()
+            await _await_with_data(reader)
+            writer.write(
+                _frontend_message(b"P", b"s1\x00SELECT 1\x00\x00\x00")
+                + _frontend_message(b"B", b"p1\x00s1\x00" + b"\x00" * 6)
+                + _frontend_message(b"P", b"commit\x00COMMIT\x00\x00\x00")
+                + _frontend_message(b"B", b"p_commit\x00commit\x00" + b"\x00" * 6)
+                + _frontend_message(b"E", b"p_commit\x00\x00\x00\x00\x00")
+                + _frontend_message(b"E", b"p1\x00\x00\x00\x00\x00")
+                + _frontend_message(b"S")
+            )
+            await writer.drain()
+            response = await _await_with_data(reader)
+            assert b"Z\x00\x00\x00\x05I" in response
+            assert b"p1" in response  # the pipelined Execute cannot reuse the expired portal
+            assert sorted(closed) == ["p1", "p_commit"]
+            writer.write(
+                _frontend_message(b"C", b"Ss1\x00")
+                + _frontend_message(b"C", b"Scommit\x00")
+                + _frontend_message(b"S")
+            )
+            await writer.drain()
+            await _await_with_data(reader)
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+
 async def test_simple_query_commit_closes_named_portals():
     closed: list[str] = []
 
