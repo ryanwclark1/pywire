@@ -424,7 +424,7 @@ async def test_extended_query_binary_stream_and_portal_suspension():
                 + _frontend_message(b"D", describe)
                 + _frontend_message(b"E", execute)
                 + _frontend_message(b"E", execute)
-                + _frontend_message(b"S")
+                + _frontend_message(b"H")
             )
             await writer.drain()
             payload = await _await_with_data(reader)
@@ -438,7 +438,7 @@ async def test_extended_query_binary_stream_and_portal_suspension():
                 value for kind, value in calls if kind == "execute"
             ]
             first_portal = bound_portals["p1"]
-            writer.write(_frontend_message(b"B", bind) + _frontend_message(b"S"))
+            writer.write(_frontend_message(b"B", bind) + _frontend_message(b"H"))
             await writer.drain()
             await _await_with_data(reader)
             assert bound_portals["p1"] is not first_portal
@@ -577,14 +577,14 @@ async def test_unnamed_statement_replacement_closes_dependent_portals():
             writer.write(
                 _frontend_message(b"P", b"\x00SELECT 1\x00\x00\x00")
                 + _frontend_message(b"B", b"p1\x00\x00\x00\x00\x00\x00\x00\x00")
-                + _frontend_message(b"S")
+                + _frontend_message(b"H")
             )
             await writer.drain()
             await _await_with_data(reader)
             writer.write(
                 _frontend_message(b"P", b"\x00SELECT 3\x00\x00\x00")
                 + _frontend_message(b"B", b"p2\x00\x00\x00\x00\x00\x00\x00\x00")
-                + _frontend_message(b"S")
+                + _frontend_message(b"H")
             )
             await writer.drain()
             await _await_with_data(reader)
@@ -600,6 +600,19 @@ async def test_unnamed_statement_replacement_closes_dependent_portals():
             ]
             writer.write(
                 _frontend_message(b"E", b"p2\x00\x00\x00\x00\x00") + _frontend_message(b"S")
+            )
+            await writer.drain()
+            assert b"E" in await _await_with_data(reader)
+            writer.write(
+                _frontend_message(b"P", b"s3\x00SELECT 4\x00\x00\x00")
+                + _frontend_message(b"B", b"p3\x00s3\x00" + b"\x00" * 6)
+                + _frontend_message(b"S")
+            )
+            await writer.drain()
+            await _await_with_data(reader)
+            assert closed[-1] == ("portal", "p3")
+            writer.write(
+                _frontend_message(b"E", b"p3\x00\x00\x00\x00\x00") + _frontend_message(b"S")
             )
             await writer.drain()
             assert b"E" in await _await_with_data(reader)

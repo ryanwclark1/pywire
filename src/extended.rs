@@ -20,7 +20,7 @@ use pgwire::messages::extendedquery::{
     Bind, BindComplete, Close, CloseComplete, Parse, ParseComplete, Sync as PgSync,
     TARGET_TYPE_BYTE_PORTAL, TARGET_TYPE_BYTE_STATEMENT,
 };
-use pgwire::messages::response::ReadyForQuery;
+use pgwire::messages::response::{ReadyForQuery, TransactionStatus};
 use pgwire::messages::PgWireBackendMessage;
 use pyo3::prelude::*;
 use pyo3_async_runtimes::tokio as pyo3_tokio;
@@ -487,8 +487,26 @@ impl PgExtendedQueryHandler for PyExtendedHandler {
         C::Error: Debug,
         PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
     {
-        self.close_portal(client, DEFAULT_NAME).await?;
-        client.portal_store().rm_portal(DEFAULT_NAME);
+        if matches!(client.transaction_status(), TransactionStatus::Idle) {
+            let portal_names = client
+                .session_extensions()
+                .get::<PythonPortals>()
+                .map(|portals| {
+                    portals
+                        .0
+                        .lock()
+                        .unwrap()
+                        .keys()
+                        .cloned()
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            for portal_name in portal_names {
+                self.close_portal(client, &portal_name).await?;
+                client.portal_store().rm_portal(&portal_name);
+            }
+            client.portal_store().rm_portal(DEFAULT_NAME);
+        }
         client
             .send(PgWireBackendMessage::ReadyForQuery(ReadyForQuery::new(
                 client.transaction_status(),
