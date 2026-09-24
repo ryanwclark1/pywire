@@ -50,6 +50,7 @@ use pyo3::prelude::*;
 use pyo3_async_runtimes::tokio as pyo3_tokio;
 use rustls_pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer};
 use tokio::net::TcpListener;
+use tokio::task::JoinSet;
 
 use crate::auth::{PyAuthSource, PyLoginInfo};
 use crate::errors::py_err_to_pywire;
@@ -417,22 +418,24 @@ fn serve<'py>(
         let listener = TcpListener::bind(socket_addr).await.map_err(|e| {
             pyo3::exceptions::PyOSError::new_err(format!("bind {socket_addr} failed: {e}"))
         })?;
+        let mut connections = JoinSet::new();
         loop {
             // Defensive: accept-loop IO failures (e.g. fd exhaustion)
             // surface as a Python OSError. Marked LCOV_EXCL_LINE because
             // reliably triggering a mid-listen accept failure from a
             // test isn't worth the contortion.
-            let (sock, _peer) = listener
-                .accept()
-                .await
-                .map_err(|e| pyo3::exceptions::PyOSError::new_err(format!("accept failed: {e}")))?; // LCOV_EXCL_LINE
+            let (sock, _peer) = tokio::select! {
+                result = listener.accept() => result.map_err(|e|
+                    pyo3::exceptions::PyOSError::new_err(format!("accept failed: {e}")))?, // LCOV_EXCL_LINE
+                _ = connections.join_next(), if !connections.is_empty() => continue,
+            };
             let handlers = config
                 .build()
                 .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))?;
             let handlers = Arc::new(handlers);
             let tls_acceptor = tls_acceptor.clone();
             let locals = task_locals.clone();
-            tokio::spawn(async move {
+            connections.spawn(async move {
                 let _ = pyo3_tokio::scope(locals, async move {
                     process_socket(sock, tls_acceptor, handlers).await
                 })

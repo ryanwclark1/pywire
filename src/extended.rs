@@ -1,7 +1,9 @@
 //! Adapter for PostgreSQL's extended query protocol.
 
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use async_trait::async_trait;
 use futures::{Sink, SinkExt};
@@ -11,10 +13,14 @@ use pgwire::api::results::{
     DescribePortalResponse, DescribeStatementResponse, FieldInfo as PgFieldInfo, Response,
 };
 use pgwire::api::stmt::{QueryParser, StoredStatement};
-use pgwire::api::store::PortalStore;
+use pgwire::api::store::{Entry, PortalStore};
 use pgwire::api::{ClientInfo, ClientPortalStore, Type, DEFAULT_NAME};
-use pgwire::error::{PgWireError, PgWireResult};
-use pgwire::messages::extendedquery::{Parse, ParseComplete};
+use pgwire::error::{ErrorInfo, PgWireError, PgWireResult};
+use pgwire::messages::extendedquery::{
+    Bind, BindComplete, Close, CloseComplete, Parse, ParseComplete, Sync as PgSync,
+    TARGET_TYPE_BYTE_PORTAL, TARGET_TYPE_BYTE_STATEMENT,
+};
+use pgwire::messages::response::ReadyForQuery;
 use pgwire::messages::PgWireBackendMessage;
 use pyo3::prelude::*;
 use pyo3_async_runtimes::tokio as pyo3_tokio;
@@ -39,6 +45,14 @@ impl Clone for PyStatement {
 #[derive(Debug)]
 pub struct PyExtendedHandler {
     instance: Option<Py<PyAny>>,
+}
+
+#[derive(Default)]
+struct PythonPortals(Mutex<HashMap<String, BoundPortal>>);
+
+struct BoundPortal {
+    instance: Py<PyAny>,
+    portal: Py<PyAny>,
 }
 
 impl PyExtendedHandler {
@@ -95,26 +109,61 @@ impl PyExtendedHandler {
         instance: Option<&Py<PyAny>>,
         name: &str,
         sql: &str,
-        types: &[Option<Type>],
+        type_oids: &[u32],
     ) -> PgWireResult<PyStatement> {
         let Some(instance) = instance else {
             return Err(PgWireError::ApiError(
                 "extended query callback is not configured".into(),
             ));
         };
-        let type_oids = types
-            .iter()
-            .map(|value| value.as_ref().map_or(0, Type::oid))
-            .collect::<Vec<_>>();
         let future = Python::attach(|py| -> PyResult<_> {
             let coroutine = instance
                 .bind(py)
-                .call_method1("parse_statement", (name, sql, type_oids))?;
+                .call_method1("parse_statement", (name, sql, type_oids.to_vec()))?;
             pyo3_tokio::into_future(coroutine)
         })
         .map_err(py_error)?;
         future.await.map(PyStatement).map_err(py_error)
     }
+
+    fn portal_for<C: ClientInfo>(&self, client: &C, name: &str) -> PgWireResult<Py<PyAny>> {
+        let portals = client
+            .session_extensions()
+            .get::<PythonPortals>()
+            .ok_or_else(|| PgWireError::PortalNotFound(name.to_owned()))?;
+        let entries = portals.0.lock().unwrap();
+        Python::attach(|py| {
+            entries
+                .get(name)
+                .map(|bound| bound.portal.clone_ref(py))
+                .ok_or_else(|| PgWireError::PortalNotFound(name.to_owned()))
+        })
+    }
+
+    async fn close_portal<C: ClientInfo>(&self, client: &C, name: &str) -> PgWireResult<()> {
+        let Some(portals) = client.session_extensions().get::<PythonPortals>() else {
+            return Ok(());
+        };
+        let instance = {
+            let entries = portals.0.lock().unwrap();
+            Python::attach(|py| entries.get(name).map(|bound| bound.instance.clone_ref(py)))
+        };
+        if let Some(instance) = instance {
+            call_python(&instance, "close_portal", name).await?;
+            portals.0.lock().unwrap().remove(name);
+        }
+        Ok(())
+    }
+}
+
+async fn call_python(instance: &Py<PyAny>, method: &str, name: &str) -> PgWireResult<()> {
+    let future = Python::attach(|py| -> PyResult<_> {
+        let coroutine = instance.bind(py).call_method1(method, (name,))?;
+        pyo3_tokio::into_future(coroutine)
+    })
+    .map_err(py_error)?;
+    future.await.map_err(py_error)?;
+    Ok(())
 }
 
 fn py_error(error: PyErr) -> PgWireError {
@@ -138,7 +187,17 @@ fn result_format_codes(format: &Format) -> Vec<i16> {
 }
 
 fn pg_type(oid: u32) -> Type {
-    Type::from_oid(oid).unwrap_or(Type::UNKNOWN)
+    if oid == 0 {
+        return Type::UNKNOWN;
+    }
+    Type::from_oid(oid).unwrap_or_else(|| {
+        Type::new(
+            format!("oid{oid}"),
+            oid,
+            postgres_types::Kind::Simple,
+            "pg_catalog".to_owned(),
+        )
+    })
 }
 
 #[async_trait]
@@ -154,12 +213,17 @@ impl QueryParser for PyExtendedHandler {
         _client: &C,
         sql: &str,
         types: &[Option<Type>],
-    ) -> PgWireResult<Self::Statement>
+    ) -> PgWireResult<Option<Self::Statement>>
     where
         C: ClientInfo + Unpin + Send + Sync,
     {
-        self.parse_statement(self.instance.as_ref(), "", sql, types)
+        let type_oids = types
+            .iter()
+            .map(|value| value.as_ref().map_or(0, Type::oid))
+            .collect::<Vec<_>>();
+        self.parse_statement(self.instance.as_ref(), "", sql, &type_oids)
             .await
+            .map(Some)
     }
 
     fn get_parameter_types(&self, _stmt: &Self::Statement) -> PgWireResult<Vec<Type>> {
@@ -205,17 +269,124 @@ impl PgExtendedQueryHandler for PyExtendedHandler {
         let types = message
             .type_oids
             .iter()
-            .map(|oid| Type::from_oid(*oid))
+            .map(|oid| if *oid == 0 { None } else { Some(pg_type(*oid)) })
             .collect::<Vec<_>>();
-        let instance = self.instance_for(client);
-        let statement = self
-            .parse_statement(instance.as_ref(), &name, &message.query, &types)
-            .await?;
-        client
-            .portal_store()
-            .put_statement(Arc::new(StoredStatement::new(name, statement, types)));
+        if message.query.chars().all(|c| c == ';' || c.is_whitespace()) {
+            client.portal_store().put_empty_statement(&name);
+        } else {
+            let instance = self.instance_for(client);
+            let statement = self
+                .parse_statement(instance.as_ref(), &name, &message.query, &message.type_oids)
+                .await?;
+            client
+                .portal_store()
+                .put_statement(Arc::new(StoredStatement::new(name, statement, types)));
+        }
         client
             .send(PgWireBackendMessage::ParseComplete(ParseComplete::new()))
+            .await?;
+        Ok(())
+    }
+
+    async fn on_bind<C>(&self, client: &mut C, message: Bind) -> PgWireResult<()>
+    where
+        C: ClientInfo + ClientPortalStore + Sink<PgWireBackendMessage> + Unpin + Send + Sync,
+        C::PortalStore: PortalStore<Statement = Self::Statement>,
+        C::Error: Debug,
+        PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
+    {
+        let statement_name = message.statement_name.as_deref().unwrap_or(DEFAULT_NAME);
+        let portal_name = message.portal_name.as_deref().unwrap_or(DEFAULT_NAME);
+        match client.portal_store().get_statement(statement_name) {
+            Some(Entry::Value(statement)) => {
+                let portal = Portal::try_new(&message, statement)?;
+                // A non-empty statement only enters the store after Python Parse.
+                // LCOV_EXCL_START
+                let instance = self.instance_for(client).ok_or_else(|| {
+                    PgWireError::ApiError("extended query callback is not configured".into())
+                })?;
+                // LCOV_EXCL_STOP
+                let py_portal = self.bind_portal(&instance, &portal).await?;
+                self.close_portal(client, portal_name).await?;
+                client
+                    .session_extensions()
+                    .get_or_insert_with(PythonPortals::default)
+                    .0
+                    .lock()
+                    .unwrap()
+                    .insert(
+                        portal_name.to_owned(),
+                        BoundPortal {
+                            instance,
+                            portal: py_portal,
+                        },
+                    );
+                client.portal_store().put_portal(Arc::new(portal));
+            }
+            Some(Entry::Empty) => {
+                if !message.parameters.is_empty() {
+                    return Err(PgWireError::UserError(Box::new(ErrorInfo::new(
+                        "ERROR".to_owned(), "08P01".to_owned(),
+                        format!("bind message supplies {} parameters, but prepared statement {statement_name:?} requires 0", message.parameters.len()),
+                    ))));
+                }
+                self.close_portal(client, portal_name).await?;
+                client.portal_store().put_empty_portal(portal_name);
+            }
+            None => return Err(PgWireError::StatementNotFound(statement_name.to_owned())),
+        }
+        client
+            .send(PgWireBackendMessage::BindComplete(BindComplete::new()))
+            .await?;
+        Ok(())
+    }
+
+    async fn on_sync<C>(&self, client: &mut C, _message: PgSync) -> PgWireResult<()>
+    where
+        C: ClientInfo + ClientPortalStore + Sink<PgWireBackendMessage> + Unpin + Send + Sync,
+        C::PortalStore: PortalStore<Statement = Self::Statement>,
+        C::Error: Debug,
+        PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
+    {
+        self.close_portal(client, DEFAULT_NAME).await?;
+        client.portal_store().rm_portal(DEFAULT_NAME);
+        client
+            .send(PgWireBackendMessage::ReadyForQuery(ReadyForQuery::new(
+                client.transaction_status(),
+            )))
+            .await?;
+        client.flush().await?;
+        Ok(())
+    }
+
+    async fn on_close<C>(&self, client: &mut C, message: Close) -> PgWireResult<()>
+    where
+        C: ClientInfo + ClientPortalStore + Sink<PgWireBackendMessage> + Unpin + Send + Sync,
+        C::PortalStore: PortalStore<Statement = Self::Statement>,
+        C::Error: Debug,
+        PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
+    {
+        let name = message.name.as_deref().unwrap_or(DEFAULT_NAME);
+        match message.target_type {
+            TARGET_TYPE_BYTE_STATEMENT => {
+                if matches!(
+                    client.portal_store().get_statement(name),
+                    Some(Entry::Value(_))
+                ) {
+                    if let Some(instance) = self.instance_for(client) {
+                        call_python(&instance, "close_statement", name).await?;
+                    }
+                }
+                client.portal_store().rm_statement(name);
+            }
+            TARGET_TYPE_BYTE_PORTAL => {
+                self.close_portal(client, name).await?;
+                client.portal_store().rm_portal(name);
+            }
+            _ => {}
+        }
+        client
+            .send(PgWireBackendMessage::CloseComplete(CloseComplete::new()))
             .await?;
         Ok(())
     }
@@ -276,7 +447,7 @@ impl PgExtendedQueryHandler for PyExtendedHandler {
         let Some(instance) = self.instance_for(client) else {
             return Ok(DescribePortalResponse::new(vec![]));
         };
-        let portal = self.bind_portal(&instance, target).await?;
+        let portal = self.portal_for(client, &target.name)?;
         let future = Python::attach(|py| -> PyResult<_> {
             let coroutine = instance
                 .bind(py)
@@ -311,7 +482,7 @@ impl PgExtendedQueryHandler for PyExtendedHandler {
         PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
     {
         if let Some(instance) = self.instance_for(client) {
-            let py_portal = self.bind_portal(&instance, portal).await?;
+            let py_portal = self.portal_for(client, &portal.name)?;
             let future = Python::attach(|py| -> PyResult<_> {
                 let coroutine = instance
                     .bind(py)
@@ -351,6 +522,7 @@ mod tests {
             vec![1, 0]
         );
         assert_eq!(pg_type(23), Type::INT4);
-        assert_eq!(pg_type(u32::MAX), Type::UNKNOWN);
+        assert_eq!(pg_type(0), Type::UNKNOWN);
+        assert_eq!(pg_type(u32::MAX).oid(), u32::MAX);
     }
 }

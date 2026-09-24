@@ -23,16 +23,10 @@ class HelloHandler(SimpleQueryHandler):
 
 ## Extended query
 
-`ExtendedQueryHandler` mirrors PostgreSQL's prepared-statement protocol
-(Parse → Bind → Describe → Execute → Sync). Subclass it for full
-fidelity, or build on top of `SimpleQueryHandler` when you don't need
-prepared statements — the server (PR I) will provide a default
-`ExtendedQueryHandler` that forwards to a `SimpleQueryHandler` for
-users who want the simpler API.
-
-The Rust wiring that drives these handlers lives in `pywire.server`
-(PR I); the types here establish the Python shapes so contract-test
-handlers and documentation can reference them today.
+`ExtendedQueryHandler` handles PostgreSQL's prepared-statement protocol
+(Parse → Bind → Describe → Execute → Sync). Pass an instance as
+`extended=` to `pywire.server.serve` when clients use prepared statements.
+Without one, extended queries are rejected.
 """
 
 from __future__ import annotations
@@ -112,12 +106,10 @@ class DescribePortalResponse:
 class ExtendedQueryHandler(abc.ABC):
     """Async ABC for the extended-query protocol.
 
-    The pywire server (PR I) calls these in the order the client's
+    The pywire server calls these in the order the client's
     Parse / Bind / Describe / Execute / Sync messages dictate.
 
-    Implementations that don't need prepared statements can subclass
-    `SimpleQueryHandler` instead; the server will default-forward
-    extended-query Execute to simple-query `do_query`.
+    Clients that only send simple queries need a `SimpleQueryHandler`.
     """
 
     @abc.abstractmethod

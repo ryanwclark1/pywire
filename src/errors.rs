@@ -52,6 +52,7 @@ create_exception!(pywire.errors, UnsupportedProtocolVersion, ProtocolError, "");
 create_exception!(pywire.errors, InvalidCancelRequest, ProtocolError, "");
 create_exception!(pywire.errors, InvalidMessageType, ProtocolError, "");
 create_exception!(pywire.errors, MessageTooLarge, ProtocolError, "");
+create_exception!(pywire.errors, InvalidElementCount, ProtocolError, "");
 create_exception!(pywire.errors, InvalidTargetType, ProtocolError, "");
 create_exception!(pywire.errors, InvalidTransactionStatus, ProtocolError, "");
 create_exception!(pywire.errors, InvalidSSLRequestMessage, ProtocolError, "");
@@ -291,6 +292,7 @@ pub fn pywire_to_py_err(err: PgWireError) -> PyErr {
         PgWireError::InvalidSecretKey => InvalidSecretKey::new_err(msg),
         PgWireError::InvalidMessageType(_) => InvalidMessageType::new_err(msg),
         PgWireError::MessageTooLarge(_, _) => MessageTooLarge::new_err(msg),
+        PgWireError::InvalidElementCount(_, _, _) => InvalidElementCount::new_err(msg),
         PgWireError::InvalidTargetType(_) => InvalidTargetType::new_err(msg),
         PgWireError::InvalidTransactionStatus(_) => InvalidTransactionStatus::new_err(msg),
         PgWireError::InvalidSSLRequestMessage => InvalidSSLRequestMessage::new_err(msg),
@@ -408,6 +410,7 @@ fn _test_raise_for(variant: &str) -> PyResult<()> {
         "InvalidSecretKey" => PgWireError::InvalidSecretKey,
         "InvalidMessageType" => PgWireError::InvalidMessageType(0xFF),
         "MessageTooLarge" => PgWireError::MessageTooLarge(1024, 2048),
+        "InvalidElementCount" => PgWireError::InvalidElementCount(3, 12, 4),
         "InvalidTargetType" => PgWireError::InvalidTargetType(0xFF),
         "InvalidTransactionStatus" => PgWireError::InvalidTransactionStatus(0xFF),
         "InvalidSSLRequestMessage" => PgWireError::InvalidSSLRequestMessage,
@@ -517,6 +520,7 @@ pub fn register(parent: &Bound<'_, PyModule>) -> PyResult<()> {
     reg!(InvalidCancelRequest);
     reg!(InvalidMessageType);
     reg!(MessageTooLarge);
+    reg!(InvalidElementCount);
     reg!(InvalidTargetType);
     reg!(InvalidTransactionStatus);
     reg!(InvalidSSLRequestMessage);

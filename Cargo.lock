@@ -527,9 +527,9 @@ dependencies = [
 
 [[package]]
 name = "pg_interval"
-version = "0.5.0"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c386dd54fce258fc04e668126ae68589a0d92e03a90ea67881d1300f70fd6170"
+checksum = "8408fb1e08ebf2e7676d001caa6482d1b33e7e1f1dad9d3a758a05640eea2026"
 dependencies = [
  "bytes",
  "chrono",
@@ -538,9 +538,9 @@ dependencies = [
 
 [[package]]
 name = "pgwire"
-version = "0.40.5"
+version = "0.41.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "19cd74bebdf81b891d097ea03cceb32bd7f29728ce66de6e0dba2e3f42c8585d"
+checksum = "c667f8f4046889d52ed11e17aae954b1816d3df48dd23bdebcf199cef332df93"
 dependencies = [
  "async-trait",
  "base64 0.23.0",
@@ -690,7 +690,7 @@ dependencies = [
 
 [[package]]
 name = "pywire"
-version = "0.40.5"
+version = "0.41.0"
 dependencies = [
  "async-trait",
  "bytes",

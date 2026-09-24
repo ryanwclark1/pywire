@@ -1,55 +1,42 @@
 # Installation
 
-pywire ships pre-built wheels for the following targets:
+pywire is distributed from this Git repository. The `pywire` name on PyPI
+belongs to a different library, so `pip install pywire` does not install these
+PostgreSQL server bindings.
 
-| OS      | Architectures             | libc       |
-| ------- | ------------------------- | ---------- |
-| Linux   | `x86_64`, `aarch64`       | glibc, musl |
-| macOS   | `x86_64` + `arm64` (universal2) | — |
-| Windows | `x86_64`                  | —          |
+## Pin a source commit
 
-Python **`>=3.11`** is supported (3.11 / 3.12 / 3.13 / 3.14). Wheels use
-the stable `abi3` interface (`abi3-py311`), so a single wheel per platform
-covers every Python in the supported range. Older Python versions are
-not supported: 3.9 reached end-of-life in October 2025 and 3.10 follows
-in October 2026; pywire targets the asyncio.TaskGroup / Self / ExceptionGroup
-surface that landed in 3.11.
-
-## From PyPI
+Install from an immutable commit after the project's CI checks pass:
 
 ```bash
-pip install pywire
+pip install 'pywire @ git+https://github.com/ryanwclark1/pywire.git@<full-commit-sha>'
 ```
 
-To pin to the upstream pgwire minor we wrap, install an exact version per
-the policy in [Versioning](versioning.md):
+For a uv project, declare `pywire` in dependencies and pin the same commit
+under `[tool.uv.sources]`:
 
-```bash
-pip install 'pywire~=0.40.5'
+```toml
+[tool.uv.sources]
+pywire = { git = "https://github.com/ryanwclark1/pywire.git", rev = "<full-commit-sha>" }
 ```
 
-## From source
+A Git installation builds the native extension locally. It requires Python
+3.11 or newer, a Rust toolchain (at least Rust 1.89 for pgwire 0.41), and a
+working C compiler. The tagged build workflow also validates wheels for
+Linux, macOS, and Windows, but those artifacts are not the distribution path.
 
-You need a Rust toolchain (`stable`) and Python `>=3.11`:
+## From a checkout
 
 ```bash
-git clone https://github.com/ryanwclark1/pywire
+git clone https://github.com/ryanwclark1/pywire.git
 cd pywire
 pip install -e '.[dev]'
 ```
 
-The editable install runs `maturin develop` under the hood. For a release
-build use:
+After changing Rust code, rerun `pip install -e .` to rebuild the extension.
+
+## Verify
 
 ```bash
-maturin develop --release
+python -c 'import pywire; print(pywire.supported_protocol_range())'
 ```
-
-## Verifying the install
-
-```bash
-python -c "import pywire; print(pywire.supported_protocol_range())"
-```
-
-You should see a tuple like `(3, 3)` — the range of PostgreSQL wire-protocol
-versions the wrapped pgwire crate understands.

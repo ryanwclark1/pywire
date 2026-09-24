@@ -21,9 +21,8 @@ Examples:
 - `pywire 0.40.1` is a binding-only fix on top of the same `pgwire 0.40.x`
 - `pywire 0.41.0` migrates to `pgwire 0.41.x`
 
-The first release cut under this policy will be `0.40.0`. Versions prior to
-that (the `0.1.x` scaffolding releases, if any) predate the policy and should
-not be relied on for compatibility.
+The policy began with `0.40.0`. Consumers pin an immutable Git commit in
+addition to the version constraint.
 
 ## Pre-1.0 caveat
 
@@ -36,14 +35,15 @@ stability stronger than upstream.**
 
 | Upstream change         | Action on pywire side                                                                                                              |
 | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| Patch (`0.Y.z+1`)       | Dependabot opens a PR. Merge, run tests, release pywire `0.Y.Z+1`.                                                                 |
-| Minor (`0.Y+1.0`)       | The [upstream tracker workflow](https://github.com/ryanwclark1/pywire/blob/main/.github/workflows/upstream-tracker.yml) opens an issue. Plan the migration, address API breakage, release pywire `0.Y+1.0`. |
-| Major (`X+1.0.0`)       | Same as minor: tracker issue, migration, release pywire `X+1.0.0`.                                                                 |
+| Patch (`0.Y.z+1`)       | Dependabot opens a PR; test the update and advance the pinned Git commit. |
+| Minor (`0.Y+1.0`)       | The [upstream tracker workflow](https://github.com/ryanwclark1/pywire/blob/main/.github/workflows/upstream-tracker.yml) opens an issue; migrate the bindings and update consumers to pywire `0.Y+1.0`. |
+| Major (`X+1.0.0`)       | Same as minor: tracker issue, migration, and coordinated consumer update. |
 
 ## Yanking and security fixes
 
-Bugs serious enough to warrant a yank are fixed on the most recent minor only.
-We do not maintain release branches for older minors.
+Bugs serious enough to warrant withdrawing a revision are fixed on the most
+recent minor only. We do not maintain release branches for older minors;
+consumers can restore their previous pinned commit while a fix is prepared.
 
 ## How upstream releases are detected
 

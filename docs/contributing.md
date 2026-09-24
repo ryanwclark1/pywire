@@ -51,7 +51,7 @@ maturin develop --release
 
 Both Python and Rust must maintain **100% line and function coverage**.
 The gate is enforced in CI by `scripts/coverage.sh` and re-verified in the
-release workflow before any wheel is published.
+tagged build workflow before any wheel artifact is produced.
 
 If a line genuinely cannot be reached from a test, mark it `# pragma: no
 cover` on the Python side and explain why in a one-line comment that gets
@@ -64,9 +64,8 @@ stable Rust). Region coverage is reported as informational only.
 ## Commit message style
 
 This repo follows
-[Conventional Commits](https://www.conventionalcommits.org/). The release
-tooling (`release-please`) reads commit subjects to compute the next
-version and to generate `CHANGELOG.md`. Use these subject prefixes:
+[Conventional Commits](https://www.conventionalcommits.org/). Versions and
+`CHANGELOG.md` are updated in the release change. Use these subject prefixes:
 
 - `feat:` — new public surface (any binding addition)
 - `fix:` — bug fix
@@ -77,8 +76,7 @@ version and to generate `CHANGELOG.md`. Use these subject prefixes:
 - `refactor:` / `perf:` — internal change
 
 Breaking changes go in the body, prefixed `BREAKING CHANGE:` (or use
-`feat!:` / `fix!:` shorthand). release-please bumps the major (or, in our
-pre-1.0 phase, the minor) on `BREAKING CHANGE:` commits.
+`feat!:` / `fix!:` shorthand), and require a deliberate version review.
 
 ## Security and supply chain
 

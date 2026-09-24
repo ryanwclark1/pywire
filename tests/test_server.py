@@ -186,6 +186,34 @@ async def test_session_factory_opens_and_closes_per_connection():
     assert events == [("open", "session-user"), ("close", None)]
 
 
+async def test_server_cancellation_closes_active_sessions():
+    events: list[str] = []
+
+    class Session(query.SimpleQueryHandler):
+        async def do_query(self, q: str) -> list[query.Response]:
+            return []
+
+        def close(self) -> None:
+            events.append("close")
+
+    class Factory(server.SessionFactory):
+        async def open(self, login: auth.LoginInfo) -> Session:
+            events.append("open")
+            return Session()
+
+    async with _running_server(_DummyHandler(), session_factory=Factory()) as port:
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        writer.write(messages.Startup(parameters={"user": "session-user"}).encode())
+        await writer.drain()
+        await _await_with_data(reader)
+        assert events == ["open"]
+
+    await asyncio.sleep(0.05)
+    assert events == ["open", "close"]
+    writer.close()
+    await writer.wait_closed()
+
+
 @pytest.mark.parametrize("failure", ["not-awaitable", "raised"])
 async def test_session_factory_errors_reach_the_client(failure: str) -> None:
     class Factory(server.SessionFactory):
@@ -342,9 +370,12 @@ async def test_extended_query_binary_stream_and_portal_suspension():
             )
 
         async def describe_portal(self, portal: query.Portal) -> query.DescribePortalResponse:
+            calls.append(("describe_portal", id(portal)))
             return query.DescribePortalResponse([query.FieldInfo("v", type_id=23, format=1)])
 
         async def do_query(self, portal: query.Portal, max_rows: int) -> query.Response:
+            calls.append(("execute", id(portal)))
+
             async def rows() -> AsyncIterator[list[bytes | None]]:
                 start = int.from_bytes(portal.parameters[0] or b"", "big", signed=True)
                 for value in range(start, start + 3):
@@ -354,6 +385,12 @@ async def test_extended_query_binary_stream_and_portal_suspension():
                 [query.FieldInfo("v", type_id=23, format=1)],
                 rows(),
             )
+
+        async def close_portal(self, name: str) -> None:
+            calls.append(("close_portal", name))
+
+        async def close_statement(self, name: str) -> None:
+            calls.append(("close_statement", name))
 
     async with _running_server(_DummyHandler(), extended=Extended()) as port:
         reader, writer = await asyncio.open_connection("127.0.0.1", port)
@@ -392,10 +429,106 @@ async def test_extended_query_binary_stream_and_portal_suspension():
             assert all(value.to_bytes(4, "big") in payload for value in (7, 8, 9))
             assert ("parse", "s1") in calls
             assert ("bind", ([1], [1])) in calls
+            assert sum(kind == "bind" for kind, _ in calls) == 1
+            assert [value for kind, value in calls if kind == "describe_portal"] == [
+                value for kind, value in calls if kind == "execute"
+            ]
+            writer.write(
+                _frontend_message(b"C", b"Pp1\x00")
+                + _frontend_message(b"C", b"Ss1\x00")
+                + _frontend_message(b"S")
+            )
+            await writer.drain()
+            assert b"3" in await _await_with_data(reader)
+            assert ("close_portal", "p1") in calls
+            assert ("close_statement", "s1") in calls
         finally:
             writer.close()
             with contextlib.suppress(Exception):
                 await writer.wait_closed()
+
+
+async def test_empty_extended_statement_skips_python_parser():
+    class Extended(query.ExtendedQueryHandler):
+        async def parse_statement(self, name, q, parameter_types):
+            raise AssertionError("empty statements must not reach the parser")
+
+        async def describe_statement(self, statement):
+            raise AssertionError("empty statements must not reach describe")
+
+        async def bind_portal(self, name, statement, parameters, parameter_formats, result_formats):
+            raise AssertionError("empty statements must not reach bind")
+
+        async def describe_portal(self, portal):
+            raise AssertionError("empty portals must not reach describe")
+
+        async def do_query(self, portal, max_rows):
+            raise AssertionError("empty portals must not reach execute")
+
+    async with _running_server(_DummyHandler(), extended=Extended()) as port:
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        try:
+            writer.write(messages.Startup(parameters={"user": "tester"}).encode())
+            await writer.drain()
+            await _await_with_data(reader)
+            writer.write(
+                _frontend_message(b"P", b"empty\x00; ;\x00\x00\x00")
+                + _frontend_message(b"D", b"Sempty\x00")
+                + _frontend_message(b"B", b"portal\x00empty\x00\x00\x00\x00\x00\x00\x00")
+                + _frontend_message(b"D", b"Pportal\x00")
+                + _frontend_message(b"E", b"portal\x00\x00\x00\x00\x00")
+                + _frontend_message(b"S")
+            )
+            await writer.drain()
+            payload = await _await_with_data(reader)
+            assert b"I\x00\x00\x00\x04" in payload  # EmptyQueryResponse
+            assert b"n\x00\x00\x00\x04" in payload  # NoData
+            assert b"Z" in payload
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+
+async def test_extended_query_preserves_custom_parameter_oid():
+    seen: list[int] = []
+
+    class Extended(query.ExtendedQueryHandler):
+        async def parse_statement(self, name, q, parameter_types):
+            seen.extend(parameter_types)
+            return query.PreparedStatement(name, q, parameter_types)
+
+        async def describe_statement(self, statement):
+            return query.DescribeStatementResponse([65000], [])
+
+        async def bind_portal(self, name, statement, parameters, parameter_formats, result_formats):
+            return query.Portal(name, statement)
+
+        async def describe_portal(self, portal):
+            return query.DescribePortalResponse([])
+
+        async def do_query(self, portal, max_rows):
+            return query.Response.empty()
+
+    async with _running_server(_DummyHandler(), extended=Extended()) as port:
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        try:
+            writer.write(messages.Startup(parameters={"user": "tester"}).encode())
+            await writer.drain()
+            await _await_with_data(reader)
+            writer.write(
+                _frontend_message(
+                    b"P", b"custom\x00SELECT $1\x00\x00\x01" + (65000).to_bytes(4, "big")
+                )
+                + _frontend_message(b"D", b"Scustom\x00")
+                + _frontend_message(b"S")
+            )
+            await writer.drain()
+            payload = await _await_with_data(reader)
+            assert seen == [65000]
+            assert b"t\x00\x00\x00\x0a\x00\x01" + (65000).to_bytes(4, "big") in payload
+        finally:
+            writer.close()
+            await writer.wait_closed()
 
 
 @pytest.mark.parametrize("mode", ["invalid-row", "async-error", "next-error"])

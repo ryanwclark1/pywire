@@ -1,14 +1,16 @@
 # Changelog
 
-This file is managed by
-[release-please](https://github.com/googleapis/release-please) going
-forward. Entries are generated from
-[Conventional Commits](https://www.conventionalcommits.org/) on `main`.
-The `0.40.0` entry below is hand-written because it summarizes the
-ten-PR scaffolding-and-bindings push that brought pywire from empty
-repo to publishable v0.40.0; subsequent entries are auto-generated.
+Entries are maintained with each version change.
 
-## 0.40.0 — First public release
+## 0.41.0 — pgwire 0.41 migration
+
+- Wrap pgwire 0.41.0, including PostgreSQL-compatible empty prepared statements.
+- Preserve custom parameter type OIDs and reuse each bound Python portal through
+  Describe and Execute; deliver Close callbacks to Python handlers.
+- Build tagged artifacts for validation and document immutable Git commit pins
+  as the installation path.
+
+## 0.40.0 — Initial bindings
 
 pywire `X.Y` mirrors pgwire `X.Y`; this release wraps
 [`pgwire 0.40`](https://crates.io/crates/pgwire/0.40.0). See
@@ -48,24 +50,12 @@ pywire `X.Y` mirrors pgwire `X.Y`; this release wraps
 
 ### Infrastructure
 
-- CI on Ubuntu / macOS / Windows × Python 3.9–3.13 with cargo
-  fmt/clippy, ruff, mypy strict, cargo-deny (advisories + licenses +
-  bans + sources), and actionlint.
-- Release pipeline via `cibuildwheel` (manylinux + musllinux
-  x86_64/aarch64, macOS universal2, Windows x86_64, sdist) with
-  PyPI Trusted Publishing. A `verify` job re-runs the full gate
-  on the tagged ref before any wheel is built.
+- CI across Ubuntu, macOS, and Windows with cargo fmt/clippy, ruff,
+  mypy strict, cargo-deny, and actionlint.
+- Tagged verification and wheel-build workflow for Linux, macOS, and Windows.
 - Coverage gate: **100% effective line coverage** on hand-written
   code, with pyo3 macro decoration and explicit `// LCOV_EXCL_LINE`
   defensive-path markers exempted. Codecov for PR-level visibility.
 - Docs site at https://ryanwclark1.github.io/pywire/ (MkDocs Material
   + mkdocstrings).
-- Conventional Commits and `release-please` drive subsequent
-  version bumps and changelog entries.
-
-### Roadmap onward
-
-- v0.40.1: auth handlers (cleartext / MD5 / SCRAM), extended-query
-  trait wiring, COPY trait wiring, TLS negotiation.
-- v0.40.x: continued binding polish + bug fixes.
-- v0.41.0: tracks the next pgwire minor bump.
+- Conventional Commits are used for change history.

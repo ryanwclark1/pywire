@@ -34,7 +34,7 @@ body:
     attributes:
       label: pywire version
       description: Output of `python -c "import pywire; print(pywire.__version__)"` or the wheel filename.
-      placeholder: "0.40.0"
+      placeholder: "0.41.0 and the pinned Git commit"
     validations:
       required: true
 

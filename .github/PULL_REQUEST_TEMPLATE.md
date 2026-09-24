@@ -3,7 +3,7 @@ Thanks for opening a PR. The boilerplate below is a checklist, not a
 rule book — feel free to delete sections that don't apply.
 
 Use Conventional Commits in your commit subjects (`feat:`, `fix:`,
-`docs:`, ...). `release-please` reads them to compute the next version
+`docs:`, ...). Version changes are reviewed explicitly in the release change
 and the changelog. See `docs/contributing.md`.
 -->
 

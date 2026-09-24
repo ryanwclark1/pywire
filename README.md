@@ -18,5 +18,5 @@ pytest -q
 Project docs:
 
 - [`VERSIONING.md`](VERSIONING.md) — version compatibility policy with upstream pgwire
-- [`RELEASING.md`](RELEASING.md) — release flow, PyPI Trusted Publishing setup
+- [`RELEASING.md`](RELEASING.md) — tagged build and Git commit pin workflow
 - [`BINDING_STRATEGY.md`](BINDING_STRATEGY.md) — how we plan to surface pgwire to Python (read before opening a binding PR)

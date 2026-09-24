@@ -19,8 +19,7 @@ class StaticUsers(AuthSource):
             raise InvalidPassword(user) from None
 ```
 
-The handler classes themselves (cleartext / MD5 / SCRAM startup
-handlers) ship with `pywire.server` (PR I); they consume an
+The cleartext and SCRAM startup handlers live in `pywire.server`; they consume an
 `AuthSource` instance per connection.
 
 `LoginInfo` and `Password` are pyclass-shaped and immutable. They form

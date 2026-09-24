@@ -151,9 +151,9 @@ return `Response.error(ErrorInfo(...))` from `do_query` and let other
 ## What `serve` returns
 
 `serve()` is an `async def` that runs until cancelled. Cancellation
-shuts down the accept loop but in-flight per-connection tasks may keep
-running until they complete their current request. For deterministic
-shutdown, build your own shutdown handle and weave it into the task.
+closes the listener and aborts active connection tasks. The optional
+synchronous session `close()` callback runs when each task releases its
+session.
 
 ## Reference
 
