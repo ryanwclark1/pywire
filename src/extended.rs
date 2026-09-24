@@ -208,7 +208,7 @@ fn is_empty_query(sql: &str) -> bool {
         }
         if ch == '-' && chars.next_if_eq(&'-').is_some() {
             for comment_ch in chars.by_ref() {
-                if comment_ch == '\n' {
+                if comment_ch == '\n' || comment_ch == '\r' {
                     break;
                 }
             }
@@ -577,6 +577,7 @@ mod tests {
             "SELECT 1",
             "/* incomplete",
             "-- comment\nSELECT 1",
+            "-- comment\rSELECT 1",
             "/* comment */ SELECT 1",
         ] {
             assert!(!is_empty_query(sql), "{sql:?}");
