@@ -200,6 +200,42 @@ fn pg_type(oid: u32) -> Type {
     })
 }
 
+fn is_empty_query(sql: &str) -> bool {
+    let mut chars = sql.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch.is_whitespace() || ch == ';' {
+            continue;
+        }
+        if ch == '-' && chars.next_if_eq(&'-').is_some() {
+            for comment_ch in chars.by_ref() {
+                if comment_ch == '\n' {
+                    break;
+                }
+            }
+            continue;
+        }
+        if ch == '/' && chars.next_if_eq(&'*').is_some() {
+            let mut depth = 1;
+            while let Some(comment_ch) = chars.next() {
+                if comment_ch == '/' && chars.next_if_eq(&'*').is_some() {
+                    depth += 1;
+                } else if comment_ch == '*' && chars.next_if_eq(&'/').is_some() {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+            }
+            if depth != 0 {
+                return false;
+            }
+            continue;
+        }
+        return false;
+    }
+    true
+}
+
 #[async_trait]
 impl QueryParser for PyExtendedHandler {
     type Statement = PyStatement;
@@ -271,7 +307,7 @@ impl PgExtendedQueryHandler for PyExtendedHandler {
             .iter()
             .map(|oid| if *oid == 0 { None } else { Some(pg_type(*oid)) })
             .collect::<Vec<_>>();
-        if message.query.chars().all(|c| c == ';' || c.is_whitespace()) {
+        if is_empty_query(&message.query) {
             client.portal_store().put_empty_statement(&name);
         } else {
             let instance = self.instance_for(client);
@@ -306,8 +342,8 @@ impl PgExtendedQueryHandler for PyExtendedHandler {
                     PgWireError::ApiError("extended query callback is not configured".into())
                 })?;
                 // LCOV_EXCL_STOP
-                let py_portal = self.bind_portal(&instance, &portal).await?;
                 self.close_portal(client, portal_name).await?;
+                let py_portal = self.bind_portal(&instance, &portal).await?;
                 client
                     .session_extensions()
                     .get_or_insert_with(PythonPortals::default)
@@ -524,5 +560,26 @@ mod tests {
         assert_eq!(pg_type(23), Type::INT4);
         assert_eq!(pg_type(0), Type::UNKNOWN);
         assert_eq!(pg_type(u32::MAX).oid(), u32::MAX);
+    }
+
+    #[test]
+    fn empty_query_recognizes_comments() {
+        for sql in [
+            "",
+            "; ;",
+            "-- line",
+            "/* block */",
+            "; /* outer /* inner */ end */ -- tail",
+        ] {
+            assert!(is_empty_query(sql), "{sql:?}");
+        }
+        for sql in [
+            "SELECT 1",
+            "/* incomplete",
+            "-- comment\nSELECT 1",
+            "/* comment */ SELECT 1",
+        ] {
+            assert!(!is_empty_query(sql), "{sql:?}");
+        }
     }
 }

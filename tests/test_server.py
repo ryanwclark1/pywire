@@ -339,6 +339,7 @@ def _frontend_message(kind: bytes, body: bytes = b"") -> bytes:
 
 async def test_extended_query_binary_stream_and_portal_suspension():
     calls: list[tuple[str, object]] = []
+    bound_portals: dict[str, query.Portal] = {}
 
     class Extended(query.ExtendedQueryHandler):
         async def parse_statement(
@@ -361,13 +362,15 @@ async def test_extended_query_binary_stream_and_portal_suspension():
             result_formats: list[int],
         ) -> query.Portal:
             calls.append(("bind", (parameter_formats, result_formats)))
-            return query.Portal(
+            portal = query.Portal(
                 name,
                 statement,
                 parameters,
                 parameter_formats,
                 result_formats,
             )
+            bound_portals[name] = portal
+            return portal
 
         async def describe_portal(self, portal: query.Portal) -> query.DescribePortalResponse:
             calls.append(("describe_portal", id(portal)))
@@ -388,6 +391,7 @@ async def test_extended_query_binary_stream_and_portal_suspension():
 
         async def close_portal(self, name: str) -> None:
             calls.append(("close_portal", name))
+            bound_portals.pop(name, None)
 
         async def close_statement(self, name: str) -> None:
             calls.append(("close_statement", name))
@@ -433,6 +437,12 @@ async def test_extended_query_binary_stream_and_portal_suspension():
             assert [value for kind, value in calls if kind == "describe_portal"] == [
                 value for kind, value in calls if kind == "execute"
             ]
+            first_portal = bound_portals["p1"]
+            writer.write(_frontend_message(b"B", bind) + _frontend_message(b"S"))
+            await writer.drain()
+            await _await_with_data(reader)
+            assert bound_portals["p1"] is not first_portal
+            assert calls[-2:] == [("close_portal", "p1"), ("bind", ([1], [1]))]
             writer.write(
                 _frontend_message(b"C", b"Pp1\x00")
                 + _frontend_message(b"C", b"Ss1\x00")
@@ -448,7 +458,8 @@ async def test_extended_query_binary_stream_and_portal_suspension():
                 await writer.wait_closed()
 
 
-async def test_empty_extended_statement_skips_python_parser():
+@pytest.mark.parametrize("sql", ["; ;", "-- comment", "/* outer /* inner */ end */"])
+async def test_empty_extended_statement_skips_python_parser(sql: str):
     class Extended(query.ExtendedQueryHandler):
         async def parse_statement(self, name, q, parameter_types):
             raise AssertionError("empty statements must not reach the parser")
@@ -472,7 +483,7 @@ async def test_empty_extended_statement_skips_python_parser():
             await writer.drain()
             await _await_with_data(reader)
             writer.write(
-                _frontend_message(b"P", b"empty\x00; ;\x00\x00\x00")
+                _frontend_message(b"P", b"empty\x00" + sql.encode() + b"\x00\x00\x00")
                 + _frontend_message(b"D", b"Sempty\x00")
                 + _frontend_message(b"B", b"portal\x00empty\x00\x00\x00\x00\x00\x00\x00")
                 + _frontend_message(b"D", b"Pportal\x00")
