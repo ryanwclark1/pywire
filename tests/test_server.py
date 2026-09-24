@@ -817,8 +817,7 @@ async def test_simple_query_closes_unnamed_portal_bound_to_named_statement():
             assert b"Z\x00\x00\x00\x05T" in await _await_with_data(reader)
             assert closed == []
             writer.write(
-                _frontend_message(b"B", b"\x00s1\x00" + b"\x00" * 6)
-                + _frontend_message(b"S")
+                _frontend_message(b"B", b"\x00s1\x00" + b"\x00" * 6) + _frontend_message(b"S")
             )
             await writer.drain()
             assert b"Z\x00\x00\x00\x05T" in await _await_with_data(reader)
