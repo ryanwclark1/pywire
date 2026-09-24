@@ -496,6 +496,28 @@ async def test_empty_extended_statement_skips_python_parser(sql: str):
             assert b"I\x00\x00\x00\x04" in payload  # EmptyQueryResponse
             assert b"n\x00\x00\x00\x04" in payload  # NoData
             assert b"Z" in payload
+            malformed_bind = (
+                b"bad\x00empty\x00"
+                + (2).to_bytes(2, "big")
+                + (0).to_bytes(2, "big") * 2
+                + (0).to_bytes(2, "big")
+                + (0).to_bytes(2, "big")
+            )
+            writer.write(_frontend_message(b"B", malformed_bind) + _frontend_message(b"S"))
+            await writer.drain()
+            malformed_response = await _await_with_data(reader)
+            assert b"08P01" in malformed_response
+            assert b"2\x00\x00\x00\x04" not in malformed_response  # no BindComplete
+            malformed_results = (
+                b"bad\x00empty\x00"
+                + (0).to_bytes(2, "big")
+                + (0).to_bytes(2, "big")
+                + (2).to_bytes(2, "big")
+                + (0).to_bytes(2, "big") * 2
+            )
+            writer.write(_frontend_message(b"B", malformed_results) + _frontend_message(b"S"))
+            await writer.drain()
+            assert b"08P01" in await _await_with_data(reader)
             writer.write(_frontend_message(b"C", b"Sempty\x00") + _frontend_message(b"S"))
             await writer.drain()
             assert b"3\x00\x00\x00\x04" in await _await_with_data(reader)

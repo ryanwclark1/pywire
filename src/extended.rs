@@ -344,6 +344,17 @@ impl PgExtendedQueryHandler for PyExtendedHandler {
     {
         let statement_name = message.statement_name.as_deref().unwrap_or(DEFAULT_NAME);
         let portal_name = message.portal_name.as_deref().unwrap_or(DEFAULT_NAME);
+        let format_count = message.parameter_format_codes.len();
+        if format_count > 1 && format_count != message.parameters.len() {
+            return Err(PgWireError::UserError(Box::new(ErrorInfo::new(
+                "ERROR".to_owned(),
+                "08P01".to_owned(),
+                format!(
+                    "bind message supplies {format_count} parameter format codes for {} parameters",
+                    message.parameters.len()
+                ),
+            ))));
+        }
         match client.portal_store().get_statement(statement_name) {
             Some(Entry::Value(statement)) => {
                 let portal = Portal::try_new(&message, statement)?;
@@ -375,6 +386,16 @@ impl PgExtendedQueryHandler for PyExtendedHandler {
                 client.portal_store().put_portal(Arc::new(portal));
             }
             Some(Entry::Empty) => {
+                if message.result_column_format_codes.len() > 1 {
+                    return Err(PgWireError::UserError(Box::new(ErrorInfo::new(
+                        "ERROR".to_owned(),
+                        "08P01".to_owned(),
+                        format!(
+                            "bind message supplies {} result format codes for 0 columns",
+                            message.result_column_format_codes.len()
+                        ),
+                    ))));
+                }
                 if !message.parameters.is_empty() {
                     return Err(PgWireError::UserError(Box::new(ErrorInfo::new(
                         "ERROR".to_owned(), "08P01".to_owned(),
