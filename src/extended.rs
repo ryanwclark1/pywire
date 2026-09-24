@@ -419,7 +419,7 @@ impl PgExtendedQueryHandler for PyExtendedHandler {
                 self.close_portal(client, name).await?;
                 client.portal_store().rm_portal(name);
             }
-            _ => {}
+            _ => return Err(PgWireError::InvalidTargetType(message.target_type)),
         }
         client
             .send(PgWireBackendMessage::CloseComplete(CloseComplete::new()))

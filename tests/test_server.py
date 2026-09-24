@@ -452,6 +452,11 @@ async def test_extended_query_binary_stream_and_portal_suspension():
             assert b"3" in await _await_with_data(reader)
             assert ("close_portal", "p1") in calls
             assert ("close_statement", "s1") in calls
+            writer.write(_frontend_message(b"C", b"Xmissing\x00") + _frontend_message(b"S"))
+            await writer.drain()
+            invalid_close = await _await_with_data(reader)
+            assert b"08P01" in invalid_close
+            assert b"3\x00\x00\x00\x04" not in invalid_close  # no CloseComplete
         finally:
             writer.close()
             with contextlib.suppress(Exception):
