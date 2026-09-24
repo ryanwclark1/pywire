@@ -6,7 +6,7 @@ package there or recommend `pip install pywire`.
 
 ## Prepare a version
 
-1. Check [VERSIONING.md](VERSIONING.md) and the upstream pgwire changelog.
+1. Check the [versioning policy](https://github.com/ryanwclark1/pywire/blob/main/VERSIONING.md) and the upstream pgwire changelog.
 2. Update `Cargo.toml`, `Cargo.lock`, and `pyproject.toml` together. A new
    upstream minor starts at the matching pywire `X.Y.0`; binding-only changes
    increment pywire's patch version.
