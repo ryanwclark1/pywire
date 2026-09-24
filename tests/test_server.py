@@ -541,7 +541,7 @@ async def test_empty_extended_statement_skips_python_parser(sql: str):
             await writer.wait_closed()
 
 
-async def test_simple_query_closes_portals_from_unnamed_statement():
+async def test_unnamed_statement_replacement_closes_dependent_portals():
     closed: list[tuple[str, str]] = []
     parsed_names: list[str] = []
 
@@ -581,12 +581,25 @@ async def test_simple_query_closes_portals_from_unnamed_statement():
             )
             await writer.drain()
             await _await_with_data(reader)
-            writer.write(_frontend_message(b"Q", b"SELECT 2\x00"))
+            writer.write(
+                _frontend_message(b"P", b"\x00SELECT 3\x00\x00\x00")
+                + _frontend_message(b"B", b"p2\x00\x00\x00\x00\x00\x00\x00\x00")
+                + _frontend_message(b"S")
+            )
             await writer.drain()
             await _await_with_data(reader)
             assert closed == [("portal", "p1"), ("statement", parsed_names[0])]
+            writer.write(_frontend_message(b"Q", b"SELECT 2\x00"))
+            await writer.drain()
+            await _await_with_data(reader)
+            assert closed == [
+                ("portal", "p1"),
+                ("statement", parsed_names[0]),
+                ("portal", "p2"),
+                ("statement", parsed_names[1]),
+            ]
             writer.write(
-                _frontend_message(b"E", b"p1\x00\x00\x00\x00\x00") + _frontend_message(b"S")
+                _frontend_message(b"E", b"p2\x00\x00\x00\x00\x00") + _frontend_message(b"S")
             )
             await writer.drain()
             assert b"E" in await _await_with_data(reader)

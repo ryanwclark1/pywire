@@ -356,6 +356,9 @@ impl PgExtendedQueryHandler for PyExtendedHandler {
             .iter()
             .map(|oid| if *oid == 0 { None } else { Some(pg_type(*oid)) })
             .collect::<Vec<_>>();
+        if name == DEFAULT_NAME {
+            self.close_statement(client, &name).await?;
+        }
         if is_empty_query(&message.query) {
             client.portal_store().put_empty_statement(&name);
         } else {
