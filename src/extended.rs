@@ -252,7 +252,7 @@ fn pg_type(oid: u32) -> Type {
 fn is_empty_query(sql: &str) -> bool {
     let mut chars = sql.chars().peekable();
     while let Some(ch) = chars.next() {
-        if ch.is_whitespace() || ch == ';' {
+        if ch.is_ascii_whitespace() || ch == ';' {
             continue;
         }
         if ch == '-' && chars.next_if_eq(&'-').is_some() {
@@ -674,6 +674,7 @@ mod tests {
             "-- comment\nSELECT 1",
             "-- comment\rSELECT 1",
             "/* comment */ SELECT 1",
+            "\u{00a0}",
         ] {
             assert!(!is_empty_query(sql), "{sql:?}");
         }
