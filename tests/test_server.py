@@ -443,15 +443,11 @@ async def test_extended_query_binary_stream_and_portal_suspension():
             await _await_with_data(reader)
             assert bound_portals["p1"] is not first_portal
             assert calls[-2:] == [("close_portal", "p1"), ("bind", ([1], [1]))]
-            writer.write(
-                _frontend_message(b"C", b"Pp1\x00")
-                + _frontend_message(b"C", b"Ss1\x00")
-                + _frontend_message(b"S")
-            )
+            writer.write(_frontend_message(b"C", b"Ss1\x00") + _frontend_message(b"S"))
             await writer.drain()
             assert b"3" in await _await_with_data(reader)
-            assert ("close_portal", "p1") in calls
-            assert ("close_statement", "s1") in calls
+            assert calls[-2:] == [("close_portal", "p1"), ("close_statement", "s1")]
+            assert "p1" not in bound_portals
             writer.write(_frontend_message(b"C", b"Xmissing\x00") + _frontend_message(b"S"))
             await writer.drain()
             invalid_close = await _await_with_data(reader)
@@ -500,6 +496,14 @@ async def test_empty_extended_statement_skips_python_parser(sql: str):
             assert b"I\x00\x00\x00\x04" in payload  # EmptyQueryResponse
             assert b"n\x00\x00\x00\x04" in payload  # NoData
             assert b"Z" in payload
+            writer.write(_frontend_message(b"C", b"Sempty\x00") + _frontend_message(b"S"))
+            await writer.drain()
+            assert b"3\x00\x00\x00\x04" in await _await_with_data(reader)
+            writer.write(
+                _frontend_message(b"E", b"portal\x00\x00\x00\x00\x00") + _frontend_message(b"S")
+            )
+            await writer.drain()
+            assert b"E" in await _await_with_data(reader)
         finally:
             writer.close()
             await writer.wait_closed()

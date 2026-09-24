@@ -48,7 +48,12 @@ pub struct PyExtendedHandler {
 }
 
 #[derive(Default)]
-struct PythonPortals(Mutex<HashMap<String, BoundPortal>>);
+struct PythonPortals(Mutex<HashMap<String, PortalEntry>>);
+
+struct PortalEntry {
+    statement_name: String,
+    bound: Option<BoundPortal>,
+}
 
 struct BoundPortal {
     instance: Py<PyAny>,
@@ -135,6 +140,7 @@ impl PyExtendedHandler {
         Python::attach(|py| {
             entries
                 .get(name)
+                .and_then(|entry| entry.bound.as_ref())
                 .map(|bound| bound.portal.clone_ref(py))
                 .ok_or_else(|| PgWireError::PortalNotFound(name.to_owned()))
         })
@@ -146,12 +152,17 @@ impl PyExtendedHandler {
         };
         let instance = {
             let entries = portals.0.lock().unwrap();
-            Python::attach(|py| entries.get(name).map(|bound| bound.instance.clone_ref(py)))
+            Python::attach(|py| {
+                entries
+                    .get(name)
+                    .and_then(|entry| entry.bound.as_ref())
+                    .map(|bound| bound.instance.clone_ref(py))
+            })
         };
         if let Some(instance) = instance {
             call_python(&instance, "close_portal", name).await?;
-            portals.0.lock().unwrap().remove(name);
         }
+        portals.0.lock().unwrap().remove(name);
         Ok(())
     }
 }
@@ -343,6 +354,7 @@ impl PgExtendedQueryHandler for PyExtendedHandler {
                 })?;
                 // LCOV_EXCL_STOP
                 self.close_portal(client, portal_name).await?;
+                client.portal_store().rm_portal(portal_name);
                 let py_portal = self.bind_portal(&instance, &portal).await?;
                 client
                     .session_extensions()
@@ -352,9 +364,12 @@ impl PgExtendedQueryHandler for PyExtendedHandler {
                     .unwrap()
                     .insert(
                         portal_name.to_owned(),
-                        BoundPortal {
-                            instance,
-                            portal: py_portal,
+                        PortalEntry {
+                            statement_name: statement_name.to_owned(),
+                            bound: Some(BoundPortal {
+                                instance,
+                                portal: py_portal,
+                            }),
                         },
                     );
                 client.portal_store().put_portal(Arc::new(portal));
@@ -367,6 +382,20 @@ impl PgExtendedQueryHandler for PyExtendedHandler {
                     ))));
                 }
                 self.close_portal(client, portal_name).await?;
+                client.portal_store().rm_portal(portal_name);
+                client
+                    .session_extensions()
+                    .get_or_insert_with(PythonPortals::default)
+                    .0
+                    .lock()
+                    .unwrap()
+                    .insert(
+                        portal_name.to_owned(),
+                        PortalEntry {
+                            statement_name: statement_name.to_owned(),
+                            bound: None,
+                        },
+                    );
                 client.portal_store().put_empty_portal(portal_name);
             }
             None => return Err(PgWireError::StatementNotFound(statement_name.to_owned())),
@@ -405,6 +434,24 @@ impl PgExtendedQueryHandler for PyExtendedHandler {
         let name = message.name.as_deref().unwrap_or(DEFAULT_NAME);
         match message.target_type {
             TARGET_TYPE_BYTE_STATEMENT => {
+                let portal_names = client
+                    .session_extensions()
+                    .get::<PythonPortals>()
+                    .map(|portals| {
+                        portals
+                            .0
+                            .lock()
+                            .unwrap()
+                            .iter()
+                            .filter(|(_, entry)| entry.statement_name == name)
+                            .map(|(portal_name, _)| portal_name.clone())
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                for portal_name in portal_names {
+                    self.close_portal(client, &portal_name).await?;
+                    client.portal_store().rm_portal(&portal_name);
+                }
                 if matches!(
                     client.portal_store().get_statement(name),
                     Some(Entry::Value(_))
