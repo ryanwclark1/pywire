@@ -30,7 +30,7 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --all-targets -- -D warnings
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
@@ -85,7 +85,7 @@ jobs:
         if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
         uses: taiki-e/install-action@cargo-llvm-cov
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
           cache: pip
