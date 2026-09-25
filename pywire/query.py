@@ -23,16 +23,10 @@ class HelloHandler(SimpleQueryHandler):
 
 ## Extended query
 
-`ExtendedQueryHandler` mirrors PostgreSQL's prepared-statement protocol
-(Parse → Bind → Describe → Execute → Sync). Subclass it for full
-fidelity, or build on top of `SimpleQueryHandler` when you don't need
-prepared statements — the server (PR I) will provide a default
-`ExtendedQueryHandler` that forwards to a `SimpleQueryHandler` for
-users who want the simpler API.
-
-The Rust wiring that drives these handlers lives in `pywire.server`
-(PR I); the types here establish the Python shapes so contract-test
-handlers and documentation can reference them today.
+`ExtendedQueryHandler` handles PostgreSQL's prepared-statement protocol
+(Parse → Bind → Describe → Execute → Sync). Pass an instance as
+`extended=` to `pywire.server.serve` when clients use prepared statements.
+Without one, extended queries are rejected.
 """
 
 from __future__ import annotations
@@ -67,8 +61,8 @@ class SimpleQueryHandler(abc.ABC):
 class PreparedStatement:
     """A parsed but not-yet-bound statement.
 
-    `name` is the empty string for unnamed statements (per the
-    PostgreSQL protocol). `parameter_types` is a list of PostgreSQL
+    For unnamed statements, the adapter passes pgwire's
+    `POSTGRESQL_DEFAULT_NAME` marker as `name`. `parameter_types` is a list of PostgreSQL
     type OIDs — `0` means "type not specified, infer from context".
     """
 
@@ -81,6 +75,7 @@ class PreparedStatement:
 class Portal:
     """A prepared statement bound to a parameter set.
 
+    Unnamed portals use pgwire's `POSTGRESQL_DEFAULT_NAME` marker as `name`.
     `parameters` is a list of `bytes | None` — one entry per parameter,
     text-format encoded, or `None` for SQL NULL.
     `parameter_formats` and `result_formats` are lists of `0` (text) or
@@ -112,12 +107,10 @@ class DescribePortalResponse:
 class ExtendedQueryHandler(abc.ABC):
     """Async ABC for the extended-query protocol.
 
-    The pywire server (PR I) calls these in the order the client's
+    The pywire server calls these in the order the client's
     Parse / Bind / Describe / Execute / Sync messages dictate.
 
-    Implementations that don't need prepared statements can subclass
-    `SimpleQueryHandler` instead; the server will default-forward
-    extended-query Execute to simple-query `do_query`.
+    Clients that only send simple queries need a `SimpleQueryHandler`.
     """
 
     @abc.abstractmethod

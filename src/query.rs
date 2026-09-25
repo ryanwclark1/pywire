@@ -143,10 +143,17 @@ enum ResponseInner {
         command: String,
         oid: Option<u32>,
         rows: Option<usize>,
+        transaction: Option<TransactionEffect>,
     },
     Query(Box<QueryInner>),
     Stream(Box<StreamInner>),
     Error(Box<PyErrorInfo>),
+}
+
+#[derive(Clone, Debug)]
+enum TransactionEffect {
+    Start,
+    End,
 }
 
 /// One statement's result inside a simple-query response. Construct via
@@ -169,19 +176,37 @@ impl PyResponse {
     }
 
     /// A no-rows command completion. Use for INSERT, UPDATE, DELETE,
-    /// CREATE TABLE, BEGIN, COMMIT, and so on. The wire tag is
-    /// `"<command>[ <oid>] [<rows>]"` per the PostgreSQL protocol.
+    /// CREATE TABLE, BEGIN, COMMIT, and so on. Set `transaction` to
+    /// `"start"` or `"end"` when the command changes transaction state;
+    /// the command tag alone is ambiguous for ROLLBACK TO SAVEPOINT.
+    /// The wire tag is `"<command>[ <oid>] [<rows>]"`.
     #[classmethod]
-    #[pyo3(signature = (command, *, oid = None, rows = None))]
+    #[pyo3(signature = (command, *, oid = None, rows = None, transaction = None))]
     fn execution(
         _cls: &Bound<'_, PyType>,
         command: String,
         oid: Option<u32>,
         rows: Option<usize>,
-    ) -> Self {
-        Self {
-            inner: ResponseInner::Execution { command, oid, rows },
-        }
+        transaction: Option<&str>,
+    ) -> PyResult<Self> {
+        let transaction = match transaction {
+            None => None,
+            Some("start") => Some(TransactionEffect::Start),
+            Some("end") => Some(TransactionEffect::End),
+            Some(value) => {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "transaction must be 'start' or 'end', got {value:?}"
+                )));
+            }
+        };
+        Ok(Self {
+            inner: ResponseInner::Execution {
+                command,
+                oid,
+                rows,
+                transaction,
+            },
+        })
     }
 
     /// A rows-returning response (SELECT, RETURNING, ...).
@@ -250,8 +275,13 @@ impl PyResponse {
     fn __repr__(&self) -> String {
         match &self.inner {
             ResponseInner::Empty => "Response.empty()".to_owned(),
-            ResponseInner::Execution { command, oid, rows } => {
-                format!("Response.execution(command={command:?}, oid={oid:?}, rows={rows:?})")
+            ResponseInner::Execution {
+                command,
+                oid,
+                rows,
+                transaction,
+            } => {
+                format!("Response.execution(command={command:?}, oid={oid:?}, rows={rows:?}, transaction={transaction:?})")
             }
             ResponseInner::Query(q) => format!(
                 "Response.query(command_tag={:?}, fields={}, rows={})",
@@ -297,7 +327,12 @@ impl PyResponse {
     pub fn into_pg(self) -> Response {
         match self.inner {
             ResponseInner::Empty => Response::EmptyQuery,
-            ResponseInner::Execution { command, oid, rows } => {
+            ResponseInner::Execution {
+                command,
+                oid,
+                rows,
+                transaction,
+            } => {
                 let mut tag = Tag::new(&command);
                 if let Some(oid) = oid {
                     tag = tag.with_oid(oid);
@@ -305,7 +340,11 @@ impl PyResponse {
                 if let Some(rows) = rows {
                     tag = tag.with_rows(rows);
                 }
-                Response::Execution(tag)
+                match transaction {
+                    Some(TransactionEffect::Start) => Response::TransactionStart(tag),
+                    Some(TransactionEffect::End) => Response::TransactionEnd(tag),
+                    None => Response::Execution(tag),
+                }
             }
             ResponseInner::Query(q) => {
                 let pg_fields: Vec<PgFieldInfo> = q.fields.into_iter().map(Into::into).collect();
@@ -426,7 +465,9 @@ fn _test_drive_handler<'py>(
                 let kind = r.kind().to_owned();
                 let summary = match &r.inner {
                     ResponseInner::Empty => String::new(),
-                    ResponseInner::Execution { command, oid, rows } => {
+                    ResponseInner::Execution {
+                        command, oid, rows, ..
+                    } => {
                         let mut s = command.clone();
                         if let Some(oid) = oid {
                             s.push_str(&format!(" oid={oid}"));
@@ -539,9 +580,48 @@ mod tests {
                 command: "INSERT".into(),
                 oid: Some(0),
                 rows: Some(5),
+                transaction: None,
             },
         };
         assert!(matches!(r.into_pg(), Response::Execution(_)));
+    }
+
+    #[test]
+    fn explicit_transaction_effect_updates_wire_state() {
+        for command in ["BEGIN", "start transaction"] {
+            let response = PyResponse {
+                inner: ResponseInner::Execution {
+                    command: command.into(),
+                    oid: None,
+                    rows: None,
+                    transaction: Some(TransactionEffect::Start),
+                },
+            };
+            assert!(matches!(response.into_pg(), Response::TransactionStart(_)));
+        }
+        for command in ["COMMIT", "END", "ROLLBACK", "ABORT"] {
+            let response = PyResponse {
+                inner: ResponseInner::Execution {
+                    command: command.into(),
+                    oid: None,
+                    rows: None,
+                    transaction: Some(TransactionEffect::End),
+                },
+            };
+            assert!(matches!(response.into_pg(), Response::TransactionEnd(_)));
+        }
+        let rollback_to_savepoint = PyResponse {
+            inner: ResponseInner::Execution {
+                command: "ROLLBACK".into(),
+                oid: None,
+                rows: None,
+                transaction: None,
+            },
+        };
+        assert!(matches!(
+            rollback_to_savepoint.into_pg(),
+            Response::Execution(_)
+        ));
     }
 
     #[test]

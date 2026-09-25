@@ -39,8 +39,7 @@ In scope:
 
 - pywire itself (the Rust extension, Python facades, and CI tooling
   in this repository).
-- Wheel build / release pipeline (anything that could ship malicious
-  bits to PyPI).
+- Native extension build and tagged artifact pipeline.
 
 Out of scope (please report upstream):
 

@@ -1,6 +1,7 @@
 import abc
 from collections.abc import AsyncIterable
 from dataclasses import dataclass
+from typing import Literal
 
 from pywire.errors import ErrorInfo
 
@@ -33,6 +34,7 @@ class Response:
         *,
         oid: int | None = None,
         rows: int | None = None,
+        transaction: Literal["start", "end"] | None = None,
     ) -> Response: ...
     @classmethod
     def query(

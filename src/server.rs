@@ -38,10 +38,14 @@ use pgwire::api::query::{
     ExtendedQueryHandler as PgExtendedQueryHandler, SimpleQueryHandler as PgSimpleQueryHandler,
 };
 use pgwire::api::results::Response;
+use pgwire::api::store::PortalStore;
 use pgwire::api::{
     ClientInfo, ClientPortalStore, ConnectionManager, PgWireConnectionState, PgWireServerHandlers,
+    DEFAULT_NAME,
 };
 use pgwire::error::{PgWireError, PgWireResult};
+use pgwire::messages::response::TransactionStatus;
+use pgwire::messages::simplequery::Query;
 use pgwire::messages::{PgWireBackendMessage, PgWireFrontendMessage};
 use pgwire::tokio::process_socket;
 use pgwire::tokio::tokio_rustls::rustls::ServerConfig;
@@ -50,10 +54,11 @@ use pyo3::prelude::*;
 use pyo3_async_runtimes::tokio as pyo3_tokio;
 use rustls_pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer};
 use tokio::net::TcpListener;
+use tokio::task::JoinSet;
 
 use crate::auth::{PyAuthSource, PyLoginInfo};
 use crate::errors::py_err_to_pywire;
-use crate::extended::PyExtendedHandler;
+use crate::extended::{PyExtendedHandler, PythonPortals};
 use crate::query::PyQueryHandler;
 
 // ---------- SimpleQueryHandler adapter --------------------------------
@@ -62,13 +67,37 @@ use crate::query::PyQueryHandler;
 /// Python `PyQueryHandler`.
 struct PyServerSimpleQueryHandler {
     inner: Arc<PyQueryHandler>,
+    extended: Arc<PyExtendedHandler>,
 }
 
 #[async_trait]
 impl PgSimpleQueryHandler for PyServerSimpleQueryHandler {
+    async fn on_query<C>(&self, client: &mut C, query: Query) -> PgWireResult<()>
+    where
+        C: ClientInfo + ClientPortalStore + Sink<PgWireBackendMessage> + Unpin + Send + Sync,
+        C::PortalStore: PortalStore,
+        C::Error: Debug,
+        PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
+    {
+        if !matches!(client.state(), PgWireConnectionState::ReadyForQuery) {
+            return Err(PgWireError::NotReadyForQuery);
+        }
+        self.extended.close_portal(client, DEFAULT_NAME).await?;
+        client.portal_store().rm_portal(DEFAULT_NAME);
+        self.extended.close_statement(client, DEFAULT_NAME).await?;
+        let result = self._on_query(client, query).await;
+        if matches!(client.transaction_status(), TransactionStatus::Idle) {
+            self.extended.close_all_portals(client).await?;
+        }
+        result
+    }
+
     async fn do_query<C>(&self, client: &mut C, query: &str) -> PgWireResult<Vec<Response>>
     where
         C: ClientInfo + ClientPortalStore + Sink<PgWireBackendMessage> + Unpin + Send + Sync,
+        C::PortalStore: PortalStore,
+        C::Error: Debug,
+        PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
     {
         let session = client.session_extensions().get::<PySession>();
         let py_responses = if let Some(session) = session {
@@ -77,7 +106,14 @@ impl PgSimpleQueryHandler for PyServerSimpleQueryHandler {
             self.inner.do_query(query).await
         }
         .map_err(|err| Python::attach(|py| py_err_to_pywire(py, err)))?;
-        Ok(py_responses.into_iter().map(|r| r.into_pg()).collect())
+        let responses: Vec<Response> = py_responses.into_iter().map(|r| r.into_pg()).collect();
+        if responses
+            .iter()
+            .any(|response| matches!(response, Response::TransactionEnd(_)))
+        {
+            self.extended.close_all_portals(client).await?;
+        }
+        Ok(responses)
     }
 }
 
@@ -94,17 +130,6 @@ struct PyAuthSourceWrapper(Arc<PyAuthSource>);
 #[derive(Debug)]
 pub(crate) struct PySession {
     pub(crate) instance: Py<PyAny>,
-}
-
-impl Drop for PySession {
-    fn drop(&mut self) {
-        Python::attach(|py| {
-            let instance = self.instance.bind(py);
-            if instance.hasattr("close").unwrap_or(false) {
-                let _ = instance.call_method0("close");
-            }
-        });
-    }
 }
 
 #[async_trait]
@@ -124,6 +149,7 @@ struct PyStartupHandler {
     inner: PyStartupInner,
     require_tls: bool,
     session_factory: Option<Arc<Py<PyAny>>>,
+    resources: Arc<PythonPortals>,
 }
 
 enum PyStartupInner {
@@ -183,6 +209,14 @@ impl StartupHandler for PyStartupHandler {
             PyStartupInner::Scram(h) => h.on_startup(client, message).await,
         }?;
         if matches!(client.state(), PgWireConnectionState::ReadyForQuery)
+            && client
+                .session_extensions()
+                .get::<Arc<PythonPortals>>()
+                .is_none()
+        {
+            client.session_extensions().insert(self.resources.clone());
+        }
+        if matches!(client.state(), PgWireConnectionState::ReadyForQuery)
             && client.session_extensions().get::<PySession>().is_none()
         {
             if let Some(factory) = &self.session_factory {
@@ -196,6 +230,8 @@ impl StartupHandler for PyStartupHandler {
                 let instance = future
                     .await
                     .map_err(|error| Python::attach(|py| py_err_to_pywire(py, error)))?;
+                self.resources
+                    .set_session(Python::attach(|py| instance.clone_ref(py)));
                 client.session_extensions().insert(PySession { instance });
             }
         }
@@ -253,7 +289,7 @@ struct HandlerConfig {
 }
 
 impl HandlerConfig {
-    fn build(&self) -> PgWireResult<PyServerHandlers> {
+    fn build(&self, resources: Arc<PythonPortals>) -> PgWireResult<PyServerHandlers> {
         let startup = match self.auth_method {
             AuthMethod::Trust => PyStartupInner::Noop(ManagedNoopStartup {
                 manager: self.manager.clone(),
@@ -290,6 +326,7 @@ impl HandlerConfig {
                 inner: startup,
                 require_tls: self.require_tls,
                 session_factory: self.session_factory.clone(),
+                resources,
             }),
             extended_query: self.extended_query.clone(),
             cancel: Arc::new(DefaultCancelHandler::new(self.manager.clone())),
@@ -393,12 +430,14 @@ fn serve<'py>(
         }
     };
     let simple = Arc::new(PyQueryHandler::new(simple_query.unbind()));
+    let extended = Arc::new(PyExtendedHandler::new(extended.map(Bound::unbind)));
     let manager = Arc::new(ConnectionManager::new());
     let config = Arc::new(HandlerConfig {
         simple_query: Arc::new(PyServerSimpleQueryHandler {
             inner: simple.clone(),
+            extended: extended.clone(),
         }),
-        extended_query: Arc::new(PyExtendedHandler::new(extended.map(Bound::unbind))),
+        extended_query: extended,
         auth: auth.map(|value| Arc::new(PyAuthSource::new(value.unbind()))),
         auth_method,
         manager,
@@ -417,24 +456,29 @@ fn serve<'py>(
         let listener = TcpListener::bind(socket_addr).await.map_err(|e| {
             pyo3::exceptions::PyOSError::new_err(format!("bind {socket_addr} failed: {e}"))
         })?;
+        let mut connections = JoinSet::new();
         loop {
             // Defensive: accept-loop IO failures (e.g. fd exhaustion)
             // surface as a Python OSError. Marked LCOV_EXCL_LINE because
             // reliably triggering a mid-listen accept failure from a
             // test isn't worth the contortion.
-            let (sock, _peer) = listener
-                .accept()
-                .await
-                .map_err(|e| pyo3::exceptions::PyOSError::new_err(format!("accept failed: {e}")))?; // LCOV_EXCL_LINE
+            let (sock, _peer) = tokio::select! {
+                result = listener.accept() => result.map_err(|e|
+                    pyo3::exceptions::PyOSError::new_err(format!("accept failed: {e}")))?, // LCOV_EXCL_LINE
+                _ = connections.join_next(), if !connections.is_empty() => continue,
+            };
+            let locals = task_locals.clone();
+            let resources = Arc::new(PythonPortals::new(locals.clone()));
             let handlers = config
-                .build()
+                .build(resources.clone())
                 .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))?;
             let handlers = Arc::new(handlers);
             let tls_acceptor = tls_acceptor.clone();
-            let locals = task_locals.clone();
-            tokio::spawn(async move {
+            connections.spawn(async move {
                 let _ = pyo3_tokio::scope(locals, async move {
-                    process_socket(sock, tls_acceptor, handlers).await
+                    let result = process_socket(sock, tls_acceptor, handlers).await;
+                    resources.cleanup().await;
+                    result
                 })
                 .await;
             });

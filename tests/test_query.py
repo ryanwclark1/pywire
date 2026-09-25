@@ -106,6 +106,13 @@ def test_response_execution_with_oid_and_rows():
     assert "rows" in repr(r)
 
 
+def test_response_execution_rejects_unknown_transaction_effect():
+    with pytest.raises(ValueError, match="transaction must be"):
+        query.Response.execution("ROLLBACK", transaction="continue")  # type: ignore[arg-type]
+    assert "Start" in repr(query.Response.execution("BEGIN", transaction="start"))
+    assert "End" in repr(query.Response.execution("COMMIT", transaction="end"))
+
+
 def test_response_query():
     r = query.Response.query(
         fields=[query.FieldInfo("id", type_id=23)],
@@ -233,9 +240,9 @@ async def test_adapter_returns_multiple_responses():
     class Multi(query.SimpleQueryHandler):
         async def do_query(self, q: str) -> list[query.Response]:
             return [
-                query.Response.execution("BEGIN"),
+                query.Response.execution("BEGIN", transaction="start"),
                 query.Response.execution("INSERT", rows=1),
-                query.Response.execution("COMMIT"),
+                query.Response.execution("COMMIT", transaction="end"),
             ]
 
     out = await _test_drive_handler(Multi(), "BEGIN; INSERT ...; COMMIT;")

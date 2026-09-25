@@ -32,9 +32,8 @@ jobs:
           LATEST: ${{ steps.check.outputs.latest }}
         run: |
           set -euo pipefail
-          title="Track pgwire ${LATEST} (currently pinned to ${CURRENT})"
+          title="Track pgwire ${LATEST}"
           existing=$(gh issue list \
-            --label upstream-update \
             --state open \
             --search "${title} in:title" \
             --json number --jq 'length')
@@ -62,6 +61,5 @@ jobs:
           EOF
           )
           gh issue create \
-            --label upstream-update \
             --title "${title}" \
             --body "${body}"

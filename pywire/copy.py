@@ -6,10 +6,8 @@ issued, the wire enters streaming mode where the frontend sends
 `CopyData` / `CopyDone` / `CopyFail` messages until the operation
 completes.
 
-`CopyHandler` is the async ABC you subclass to define how your pywire
-server starts, streams, and finishes a COPY. The connection-state
-machine that drives the methods ships with `pywire.server` (PR I);
-this module establishes the Python types.
+`CopyHandler` defines the planned Python callback shape. The server does
+not currently wire these callbacks into PostgreSQL COPY messages.
 """
 
 from __future__ import annotations
