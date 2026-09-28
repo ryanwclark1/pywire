@@ -32,6 +32,7 @@ Three types are involved:
 | `LoginInfo` | What we know about the client at auth time: `user`, `database`, `host`.       |
 | `Password`  | The reference password. `salt` is `None` for cleartext, bytes for hashed.     |
 | `AuthSource`| The async ABC you subclass.                                                   |
+| `ScramVerifier` / `ScramVerifierSource` | Stored SCRAM-SHA-256 verifiers; see [SCRAM from stored verifiers](server.md#scram-from-stored-verifiers). |
 
 ## Errors
 

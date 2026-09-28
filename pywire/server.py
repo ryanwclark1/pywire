@@ -57,7 +57,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from pywire._pywire import serve as _serve
-from pywire.auth import AuthSource, LoginInfo
+from pywire.auth import AuthSource, LoginInfo, ScramVerifierSource
 from pywire.query import ExtendedQueryHandler, SimpleQueryHandler
 
 
@@ -87,10 +87,12 @@ async def serve(
     simple_query: SimpleQueryHandler,
     addr: str,
     *,
-    auth: AuthSource | None = None,
+    auth: AuthSource | ScramVerifierSource | None = None,
     extended: ExtendedQueryHandler | None = None,
     session_factory: SessionFactory | None = None,
-    auth_method: Literal["trust", "cleartext", "scram-sha-256"] = "cleartext",
+    auth_method: Literal[
+        "trust", "cleartext", "scram-sha-256", "scram-sha-256-verifier"
+    ] = "cleartext",
     tls: TLSConfig | None = None,
     scram_iterations: int = 4096,
 ) -> None:

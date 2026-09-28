@@ -7,6 +7,7 @@ mod extended;
 mod messages;
 mod query;
 mod runtime;
+mod scram_verifier;
 mod server;
 
 fn protocol_range() -> (u16, u16) {

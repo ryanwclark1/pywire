@@ -223,6 +223,7 @@ pub fn register(parent: &Bound<'_, PyModule>) -> PyResult<()> {
     let m = PyModule::new(py, "auth")?;
     m.add_class::<PyLoginInfo>()?;
     m.add_class::<PyPassword>()?;
+    crate::scram_verifier::register(&m)?;
     m.add_function(wrap_pyfunction!(_test_call_get_password, &m)?)?;
     parent.add_submodule(&m)?;
     py.import("sys")?
