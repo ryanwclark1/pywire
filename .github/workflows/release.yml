@@ -81,7 +81,7 @@ jobs:
           manylinux: auto
           args: --release --out dist --strip
           sccache: "true"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: wheels-linux-${{ matrix.target }}
           path: dist
@@ -105,7 +105,7 @@ jobs:
           manylinux: musllinux_1_2
           args: --release --out dist --strip
           sccache: "true"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: wheels-musllinux-${{ matrix.target }}
           path: dist
@@ -124,7 +124,7 @@ jobs:
           target: universal2-apple-darwin
           args: --release --out dist --strip
           sccache: "true"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: wheels-macos-universal2
           path: dist
@@ -143,7 +143,7 @@ jobs:
           target: x86_64-pc-windows-msvc
           args: --release --out dist --strip
           sccache: "true"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: wheels-windows-x86_64
           path: dist
@@ -158,7 +158,7 @@ jobs:
         with:
           command: sdist
           args: --out dist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: sdist
           path: dist
