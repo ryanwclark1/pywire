@@ -8,7 +8,8 @@
 //!   adapter (PR F). The Python handler returns `list[Response]`; we
 //!   convert each entry to pgwire's `Response` and the server takes
 //!   care of writing the frames.
-//! - **Startup / auth**: trust, cleartext, and SCRAM-SHA-256, with
+//! - **Startup / auth**: trust, cleartext, SCRAM-SHA-256 (salted password
+//!   or stored verifier, see `scram_verifier`), with
 //!   optional TLS and SCRAM channel binding.
 //! - **Extended query**: Parse/Bind/Describe/Execute route to the
 //!   Python `ExtendedQueryHandler`; pgwire owns portal suspension.
@@ -60,6 +61,9 @@ use crate::auth::{PyAuthSource, PyLoginInfo};
 use crate::errors::py_err_to_pywire;
 use crate::extended::{PyExtendedHandler, PythonPortals};
 use crate::query::PyQueryHandler;
+use crate::scram_verifier::{
+    compute_cert_signature, ScramVerifierConfig, ScramVerifierStartupHandler,
+};
 
 // ---------- SimpleQueryHandler adapter --------------------------------
 
@@ -166,6 +170,9 @@ enum PyStartupInner {
         >,
     ),
     Scram(Box<SASLAuthStartupHandler<DefaultServerParameterProvider>>),
+    /// SCRAM-SHA-256 verified against a stored (StoredKey, ServerKey)
+    /// verifier instead of a salted password.
+    ScramVerifier(Box<ScramVerifierStartupHandler>),
 }
 
 struct ManagedNoopStartup {
@@ -207,6 +214,7 @@ impl StartupHandler for PyStartupHandler {
             PyStartupInner::Noop(h) => h.on_startup(client, message).await,
             PyStartupInner::Cleartext(h) => h.on_startup(client, message).await,
             PyStartupInner::Scram(h) => h.on_startup(client, message).await,
+            PyStartupInner::ScramVerifier(h) => h.on_startup(client, message).await,
         }?;
         if matches!(client.state(), PgWireConnectionState::ReadyForQuery)
             && client
@@ -274,6 +282,7 @@ enum AuthMethod {
     Trust,
     Cleartext,
     Scram,
+    ScramVerifier,
 }
 
 struct HandlerConfig {
@@ -286,6 +295,7 @@ struct HandlerConfig {
     scram_iterations: usize,
     tls_certificate_pem: Option<Arc<Vec<u8>>>,
     session_factory: Option<Arc<Py<PyAny>>>,
+    scram_verifier: Option<Arc<ScramVerifierConfig>>,
 }
 
 impl HandlerConfig {
@@ -318,6 +328,16 @@ impl HandlerConfig {
                     .with_scram(scram)
                     .with_connection_manager(self.manager.clone()),
                 ))
+            }
+            AuthMethod::ScramVerifier => {
+                let config = self
+                    .scram_verifier
+                    .as_ref()
+                    .expect("validated auth configuration");
+                PyStartupInner::ScramVerifier(Box::new(ScramVerifierStartupHandler::new(
+                    config.clone(),
+                    self.manager.clone(),
+                )))
             }
         };
         Ok(PyServerHandlers {
@@ -395,10 +415,16 @@ fn serve<'py>(
         (false, "cleartext" | "trust") => AuthMethod::Trust,
         (true, "cleartext") => AuthMethod::Cleartext,
         (true, "scram-sha-256" | "scram") => AuthMethod::Scram,
+        (true, "scram-sha-256-verifier") => AuthMethod::ScramVerifier,
         (true, "trust") => AuthMethod::Trust,
         (false, "scram-sha-256" | "scram") => {
             return Err(pyo3::exceptions::PyValueError::new_err(
                 "SCRAM authentication requires auth=AuthSource",
+            ));
+        }
+        (false, "scram-sha-256-verifier") => {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "SCRAM verifier authentication requires auth=ScramVerifierSource",
             ));
         }
         (_, value) => {
@@ -429,6 +455,20 @@ fn serve<'py>(
             ));
         }
     };
+    let auth = auth.map(Bound::unbind);
+    let scram_verifier = match (auth_method, &auth) {
+        (AuthMethod::ScramVerifier, Some(source)) => Some(Arc::new(ScramVerifierConfig {
+            source: Arc::new(source.clone_ref(py)),
+            certificate: tls_certificate_pem
+                .as_deref()
+                .map(|pem| compute_cert_signature(pem).map(Arc::new))
+                .transpose()
+                .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?,
+            mock_secret: rand::random(),
+            mock_iterations: u32::try_from(scram_iterations).unwrap_or(u32::MAX),
+        })),
+        _ => None,
+    };
     let simple = Arc::new(PyQueryHandler::new(simple_query.unbind()));
     let extended = Arc::new(PyExtendedHandler::new(extended.map(Bound::unbind)));
     let manager = Arc::new(ConnectionManager::new());
@@ -438,13 +478,14 @@ fn serve<'py>(
             extended: extended.clone(),
         }),
         extended_query: extended,
-        auth: auth.map(|value| Arc::new(PyAuthSource::new(value.unbind()))),
+        auth: auth.map(|value| Arc::new(PyAuthSource::new(value))),
         auth_method,
         manager,
         require_tls,
         scram_iterations,
         tls_certificate_pem,
         session_factory: session_factory.map(|value| Arc::new(value.unbind())),
+        scram_verifier,
     });
 
     // Capture the caller's asyncio task locals (event loop) so spawned

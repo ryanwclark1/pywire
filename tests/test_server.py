@@ -88,7 +88,7 @@ async def _await_with_data(reader: asyncio.StreamReader, timeout: float = 2.0) -
 async def _running_server(  # type: ignore[no-untyped-def]
     handler: query.SimpleQueryHandler,
     *,
-    auth_source: auth.AuthSource | None = None,
+    auth_source: auth.AuthSource | auth.ScramVerifierSource | None = None,
     extended: query.ExtendedQueryHandler | None = None,
     auth_method: str = "cleartext",
     tls: server.TLSConfig | None = None,

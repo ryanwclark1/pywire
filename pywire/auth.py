@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import abc
 
-from pywire._pywire.auth import LoginInfo, Password
+from pywire._pywire.auth import LoginInfo, Password, ScramVerifier
 
 
 class AuthSource(abc.ABC):
@@ -54,4 +54,25 @@ class AuthSource(abc.ABC):
         """
 
 
-__all__ = ["AuthSource", "LoginInfo", "Password"]
+class ScramVerifierSource(abc.ABC):
+    """Abstract async source of stored SCRAM-SHA-256 verifiers.
+
+    Use with ``serve(..., auth_method="scram-sha-256-verifier")``. pywire
+    checks the client's proof against the verifier the way PostgreSQL checks
+    ``pg_authid.rolpassword``, so the server never needs the password or the
+    salted password.
+    """
+
+    @abc.abstractmethod
+    async def get_scram_verifier(self, login: LoginInfo) -> ScramVerifier | None:
+        """Return the verifier for `login`, or ``None`` if there is none.
+
+        Return ``None`` for an unknown user or a user without a SCRAM
+        verifier: pywire then runs the exchange against a mock verifier and
+        fails it exactly like a wrong password, so clients cannot probe which
+        users exist. ``ScramVerifier.parse`` reads PostgreSQL's
+        ``SCRAM-SHA-256$<iterations>:<salt>$<StoredKey>:<ServerKey>`` text.
+        """
+
+
+__all__ = ["AuthSource", "LoginInfo", "Password", "ScramVerifier", "ScramVerifierSource"]

@@ -83,6 +83,39 @@ await pywire.server.serve(
 
 When TLS is configured, SCRAM-SHA-256-PLUS channel binding is advertised.
 
+### SCRAM from stored verifiers
+
+To authenticate without holding passwords or salted passwords, keep
+PostgreSQL-style verifiers
+(`SCRAM-SHA-256$<iterations>:<salt>$<StoredKey>:<ServerKey>`, the
+`pg_authid.rolpassword` format) and select
+`auth_method="scram-sha-256-verifier"` with a `ScramVerifierSource`:
+
+```python
+from pywire.auth import LoginInfo, ScramVerifier, ScramVerifierSource
+
+
+class StoredVerifiers(ScramVerifierSource):
+    async def get_scram_verifier(self, login: LoginInfo) -> ScramVerifier | None:
+        text = await lookup_rolpassword(login.user)  # your storage
+        return ScramVerifier.parse(text) if text else None
+
+
+await pywire.server.serve(
+    Hello(),
+    "0.0.0.0:5433",
+    auth=StoredVerifiers(),
+    auth_method="scram-sha-256-verifier",
+    tls=TLSConfig("server.crt", "server.key"),
+)
+```
+
+The client proof is checked against StoredKey in constant time. Each
+verifier carries its own salt and iteration count. Return `None` for an
+unknown user: the exchange then runs against a mock verifier and fails
+with the same `28P01` error as a wrong password. SCRAM-SHA-256-PLUS
+(`tls-server-end-point`) is offered on TLS connections.
+
 ## Per-connection sessions
 
 Pass a `SessionFactory` when handlers need state tied to the authenticated

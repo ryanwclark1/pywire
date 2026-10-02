@@ -29,8 +29,28 @@ class Password:
     def __eq__(self, other: object) -> bool: ...
     def __hash__(self) -> int: ...
 
+class ScramVerifier:
+    """Stored SCRAM-SHA-256 verifier (PostgreSQL ``rolpassword`` form)."""
+
+    iterations: int
+    salt: bytes
+    stored_key: bytes
+    server_key: bytes
+
+    def __init__(
+        self, iterations: int, salt: bytes, stored_key: bytes, server_key: bytes
+    ) -> None: ...
+    @staticmethod
+    def parse(text: str) -> ScramVerifier: ...
+
 class AuthSource(abc.ABC):
     """Abstract async source of password material."""
 
     @abc.abstractmethod
     async def get_password(self, login: LoginInfo) -> Password: ...
+
+class ScramVerifierSource(abc.ABC):
+    """Abstract async source of stored SCRAM-SHA-256 verifiers."""
+
+    @abc.abstractmethod
+    async def get_scram_verifier(self, login: LoginInfo) -> ScramVerifier | None: ...
