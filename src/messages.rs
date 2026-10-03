@@ -73,7 +73,7 @@ fn decode_from_slice<T: Message>(data: &[u8]) -> PyResult<T> {
     module = "pywire.messages",
     eq,
     eq_int,
-    from_py_object
+    skip_from_py_object
 )]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PyTransactionStatus {
@@ -83,6 +83,16 @@ pub enum PyTransactionStatus {
     Transaction,
     /// Inside a failed transaction block (`'E'`).
     Error,
+}
+
+impl FromPyObject<'_, '_> for PyTransactionStatus {
+    type Error = PyErr;
+
+    fn extract(obj: Borrowed<'_, '_, PyAny>) -> PyResult<Self> {
+        // PyO3's generated extraction clones even Copy enums, which triggers
+        // clone_on_copy on Rust 1.99. Preserve value extraction with a copy.
+        Ok(*obj.cast::<Self>()?.try_borrow()?)
+    }
 }
 
 impl From<PgTransactionStatus> for PyTransactionStatus {
