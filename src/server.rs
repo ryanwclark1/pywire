@@ -228,23 +228,32 @@ impl StartupHandler for PyStartupHandler {
             && client.session_extensions().get::<PySession>().is_none()
         {
             if let Some(factory) = &self.session_factory {
-                let login = LoginInfo::from_client_info(client);
-                let py_login = PyLoginInfo::from_pg(&login);
-                let future = Python::attach(|py| -> PyResult<_> {
-                    let coroutine = factory.bind(py).call_method1("open", (py_login,))?;
-                    pyo3_tokio::into_future(coroutine)
-                })
-                .map_err(|error| Python::attach(|py| py_err_to_pywire(py, error)))?;
-                let instance = future
-                    .await
-                    .map_err(|error| Python::attach(|py| py_err_to_pywire(py, error)))?;
-                self.resources
-                    .set_session(Python::attach(|py| instance.clone_ref(py)));
-                client.session_extensions().insert(PySession { instance });
+                initialize_python_session(client, factory, &self.resources).await?;
             }
         }
         Ok(())
     }
+}
+
+/// Complete per-connection Python authorization before publishing startup success.
+pub(crate) async fn initialize_python_session<C: ClientInfo + Sync>(
+    client: &C,
+    factory: &Arc<Py<PyAny>>,
+    resources: &Arc<PythonPortals>,
+) -> PgWireResult<()> {
+    let login = LoginInfo::from_client_info(client);
+    let py_login = PyLoginInfo::from_pg(&login);
+    let future = Python::attach(|py| -> PyResult<_> {
+        let coroutine = factory.bind(py).call_method1("open", (py_login,))?;
+        pyo3_tokio::into_future(coroutine)
+    })
+    .map_err(|error| Python::attach(|py| py_err_to_pywire(py, error)))?;
+    let instance = future
+        .await
+        .map_err(|error| Python::attach(|py| py_err_to_pywire(py, error)))?;
+    resources.set_session(Python::attach(|py| instance.clone_ref(py)));
+    client.session_extensions().insert(PySession { instance });
+    Ok(())
 }
 
 // ---------- PgWireServerHandlers --------------------------------------
@@ -337,6 +346,8 @@ impl HandlerConfig {
                 PyStartupInner::ScramVerifier(Box::new(ScramVerifierStartupHandler::new(
                     config.clone(),
                     self.manager.clone(),
+                    self.session_factory.clone(),
+                    resources.clone(),
                 )))
             }
         };
