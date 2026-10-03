@@ -197,6 +197,12 @@ def test_ready_for_query_wire_shape():
     assert wire[5:6] == b"I"
 
 
+@pytest.mark.parametrize("status", [None, 0, "Idle", object()])
+def test_ready_for_query_rejects_non_transaction_status(status):
+    with pytest.raises(TypeError, match="TransactionStatus"):
+        ReadyForQuery(status)
+
+
 # ---- CommandComplete ---------------------------------------------------
 
 
