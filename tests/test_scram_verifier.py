@@ -213,3 +213,60 @@ async def test_serve_validates_verifier_configuration() -> None:
             auth_method="scram-sha-256-verifier",
             tls=server.TLSConfig(str(FIXTURES / "ed25519.crt"), str(FIXTURES / "ed25519.key")),
         )
+
+
+async def test_verifier_session_authorization_precedes_connection_success() -> None:
+    """A valid SCRAM proof cannot bypass a delayed post-proof refusal."""
+    opened: list[LoginInfo] = []
+
+    class Denied(server.SessionFactory):
+        async def open(self, login: LoginInfo) -> One:
+            opened.append(login)
+            await asyncio.sleep(0.1)
+            raise errors.InvalidPassword(login.user or "")
+
+    def rejected_connect(port: int, password: str) -> None:
+        with pytest.raises(psycopg.OperationalError, match="Password authentication"):
+            psycopg.connect(
+                host="127.0.0.1",
+                port=port,
+                user="alice",
+                password=password,
+                sslmode="disable",
+                connect_timeout=5,
+            )
+
+    async with _running_server(
+        One(),
+        auth_source=Verifiers(USERS),
+        auth_method="scram-sha-256-verifier",
+        session_factory=Denied(),
+    ) as port:
+        await asyncio.to_thread(rejected_connect, port, "wrong")
+        assert opened == []
+        await asyncio.to_thread(rejected_connect, port, "secret")
+        assert len(opened) == 1
+
+
+async def test_verifier_opens_one_session_before_first_query() -> None:
+    opened: list[LoginInfo] = []
+
+    class Session(query.SimpleQueryHandler):
+        async def do_query(self, q: str) -> list[query.Response]:
+            return [query.Response.query([query.FieldInfo("one", type_id=23)], [[b"2"]])]
+
+    class Factory(server.SessionFactory):
+        async def open(self, login: LoginInfo) -> Session:
+            await asyncio.sleep(0.1)
+            opened.append(login)
+            return Session()
+
+    async with _running_server(
+        One(),
+        auth_source=Verifiers(USERS),
+        auth_method="scram-sha-256-verifier",
+        session_factory=Factory(),
+    ) as port:
+        assert await asyncio.to_thread(_connect, port, "alice", "secret") == [(2,)]
+        assert len(opened) == 1
+        assert opened[0].user == "alice"

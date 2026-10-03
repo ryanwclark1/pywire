@@ -55,6 +55,8 @@ use x509_certificate::SignatureAlgorithm;
 
 use crate::auth::PyLoginInfo;
 use crate::errors::py_err_to_pywire;
+use crate::extended::PythonPortals;
+use crate::server::initialize_python_session;
 
 // ---------- ScramVerifier ---------------------------------------------
 
@@ -380,15 +382,24 @@ pub(crate) struct ScramVerifierStartupHandler {
     config: Arc<ScramVerifierConfig>,
     manager: Arc<ConnectionManager>,
     parameters: DefaultServerParameterProvider,
+    session_factory: Option<Arc<Py<PyAny>>>,
+    resources: Arc<PythonPortals>,
     pids: RandomPidSecretKeyGenerator,
     state: Mutex<State>,
 }
 
 impl ScramVerifierStartupHandler {
-    pub(crate) fn new(config: Arc<ScramVerifierConfig>, manager: Arc<ConnectionManager>) -> Self {
+    pub(crate) fn new(
+        config: Arc<ScramVerifierConfig>,
+        manager: Arc<ConnectionManager>,
+        session_factory: Option<Arc<Py<PyAny>>>,
+        resources: Arc<PythonPortals>,
+    ) -> Self {
         Self {
             config,
             manager,
+            session_factory,
+            resources,
             parameters: DefaultServerParameterProvider::default(),
             pids: RandomPidSecretKeyGenerator::default(),
             state: Mutex::new(State::Initial),
@@ -515,6 +526,9 @@ impl StartupHandler for ScramVerifierStartupHandler {
                 State::ServerFirstSent(exchange) => {
                     let response = message.into_sasl_response()?;
                     let server_final = exchange.verify(&response.data)?;
+                    if let Some(factory) = &self.session_factory {
+                        initialize_python_session(client, factory, &self.resources).await?;
+                    }
                     client
                         .send(PgWireBackendMessage::Authentication(
                             Authentication::SASLFinal(Bytes::from(server_final)),
