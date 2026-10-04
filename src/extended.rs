@@ -52,6 +52,7 @@ pub(crate) struct PythonPortals {
     statements: Mutex<HashMap<String, Py<PyAny>>>,
     session: Mutex<Option<Py<PyAny>>>,
     locals: pyo3_async_runtimes::TaskLocals,
+    pub(crate) closing: tokio::sync::Mutex<()>,
 }
 
 struct PortalEntry {
@@ -71,6 +72,7 @@ impl PythonPortals {
             statements: Mutex::new(HashMap::new()),
             session: Mutex::new(None),
             locals,
+            closing: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -224,6 +226,8 @@ impl PyExtendedHandler {
         let Some(portals) = client.session_extensions().get::<Arc<PythonPortals>>() else {
             return Ok(()); // LCOV_EXCL_LINE - startup always installs connection resources
         };
+        // Shutdown must not drop a protocol Close callback halfway through.
+        let _closing = portals.closing.lock().await;
         let instance = {
             let entries = portals.portals.lock().unwrap();
             Python::attach(|py| {
@@ -271,6 +275,9 @@ impl PyExtendedHandler {
         C: ClientInfo + ClientPortalStore,
         C::PortalStore: PortalStore,
     {
+        let Some(portals) = client.session_extensions().get::<Arc<PythonPortals>>() else {
+            return Ok(()); // LCOV_EXCL_LINE - startup always installs connection resources
+        };
         let portal_names = client
             .session_extensions()
             .get::<Arc<PythonPortals>>()
@@ -289,6 +296,7 @@ impl PyExtendedHandler {
             self.close_portal(client, &portal_name).await?;
             client.portal_store().rm_portal(&portal_name);
         }
+        let _closing = portals.closing.lock().await;
         if matches!(
             client.portal_store().get_statement(name),
             Some(Entry::Value(_))
@@ -300,9 +308,7 @@ impl PyExtendedHandler {
             }
             // LCOV_EXCL_STOP
         }
-        if let Some(portals) = client.session_extensions().get::<Arc<PythonPortals>>() {
-            portals.statements.lock().unwrap().remove(name);
-        }
+        portals.statements.lock().unwrap().remove(name);
         client.portal_store().rm_statement(name);
         Ok(())
     }
