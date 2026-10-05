@@ -156,6 +156,37 @@ async def test_simple_query_round_trip_over_tcp():
                 await writer.wait_closed()
 
 
+async def test_native_server_future_remains_cancellable():
+    closed = asyncio.Event()
+
+    class Session(_DummyHandler):
+        def close(self):
+            closed.set()
+
+    class Factory(server.SessionFactory):
+        async def open(self, login):
+            return Session()
+
+    port = await _test_bind_ephemeral()
+    running = _native_serve(_DummyHandler(), f"127.0.0.1:{port}", session_factory=Factory())
+    await asyncio.sleep(0.05)
+    reader, writer = await asyncio.open_connection("127.0.0.1", port)
+    try:
+        writer.write(messages.Startup(parameters={"user": "tester"}).encode())
+        await writer.drain()
+        assert b"Z\x00\x00\x00\x05I" in await _await_with_data(reader)
+        writer.write(messages.Query("SELECT 1").encode())
+        await writer.drain()
+        assert b"Z\x00\x00\x00\x05I" in await _await_with_data(reader)
+    finally:
+        running.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await running
+        await asyncio.wait_for(closed.wait(), 2)
+        writer.close()
+        await writer.wait_closed()
+
+
 async def test_session_factory_opens_and_closes_per_connection():
     events: list[tuple[str, str | None]] = []
 
@@ -1152,6 +1183,116 @@ async def test_session_closes_after_extended_resources(disconnect: str) -> None:
     assert closed == ["portal", "statement", "session"]
 
 
+@pytest.mark.parametrize("disconnect", ["socket", "server"])
+@pytest.mark.parametrize("cancel_again", [False, True])
+@pytest.mark.parametrize(
+    "close_target,fail_close",
+    [(None, False), ("portal", False), ("statement", False), ("portal", True), ("statement", True)],
+)
+async def test_server_cancellation_waits_for_statement_cleanup(
+    disconnect: str, cancel_again: bool, close_target: str | None, fail_close: bool
+) -> None:
+    closed: list[str] = []
+    attempts: list[str] = []
+    started = asyncio.Event()
+    release = asyncio.Event()
+    done = asyncio.Event()
+
+    class Session(query.SimpleQueryHandler, query.ExtendedQueryHandler):
+        async def do_query(self, q, max_rows=None):
+            return []
+
+        async def parse_statement(self, name, q, parameter_types):
+            return query.PreparedStatement(name, q, parameter_types)
+
+        async def describe_statement(self, statement):
+            return query.DescribeStatementResponse([], [])
+
+        async def bind_portal(self, name, statement, parameters, parameter_formats, result_formats):
+            return query.Portal(name, statement)
+
+        async def describe_portal(self, portal):
+            return query.DescribePortalResponse([])
+
+        async def close_portal(self, name):
+            attempts.append("portal")
+            if close_target == "portal":
+                started.set()
+                await release.wait()
+            closed.append("portal")
+            if fail_close and close_target == "portal" and attempts.count("portal") == 1:
+                raise RuntimeError("close portal failed")
+
+        async def close_statement(self, name):
+            attempts.append("statement")
+            if close_target != "portal":
+                started.set()
+                await release.wait()
+            closed.append("statement")
+            if fail_close and close_target == "statement" and attempts.count("statement") == 1:
+                raise RuntimeError("close statement failed")
+
+        def close(self):
+            closed.append("session")
+            done.set()
+
+    class Factory(server.SessionFactory):
+        async def open(self, login):
+            return Session()
+
+    port = await _test_bind_ephemeral()
+    serving = asyncio.create_task(
+        server.serve(_DummyHandler(), f"127.0.0.1:{port}", session_factory=Factory())
+    )
+    await asyncio.sleep(0.05)
+    reader, writer = await asyncio.open_connection("127.0.0.1", port)
+    try:
+        writer.write(messages.Startup(parameters={"user": "tester"}).encode())
+        await writer.drain()
+        await _await_with_data(reader)
+        writer.write(
+            _frontend_message(b"P", b"s1\x00SELECT 1\x00\x00\x00")
+            + _frontend_message(b"B", b"p1\x00s1\x00" + b"\x00" * 6)
+            + _frontend_message(b"H")
+        )
+        await writer.drain()
+        await _await_with_data(reader)
+        if close_target is not None:
+            target = b"Pp1\x00" if close_target == "portal" else b"Ss1\x00"
+            writer.write(_frontend_message(b"C", target) + _frontend_message(b"H"))
+            await writer.drain()
+            await asyncio.wait_for(started.wait(), 2)
+        if disconnect == "socket":
+            writer.close()
+            await writer.wait_closed()
+        serving.cancel()
+        await asyncio.wait_for(started.wait(), 2)
+        assert not serving.done(), "serve returned before async statement cleanup completed"
+        if cancel_again:
+            serving.cancel()
+            await asyncio.sleep(0)
+            assert not serving.done(), "repeated cancellation interrupted cleanup"
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(asyncio.shield(serving), 0.05)
+        assert attempts == (["portal"] if close_target == "portal" else ["portal", "statement"])
+    finally:
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(serving, 2)
+        await asyncio.wait_for(done.wait(), 2)
+        writer.close()
+        await writer.wait_closed()
+    if fail_close and close_target == "portal":
+        assert attempts == ["portal", "portal", "statement"]
+        assert closed == ["portal", "portal", "statement", "session"]
+    elif fail_close and close_target == "statement":
+        assert attempts == ["portal", "statement", "statement"]
+        assert closed == ["portal", "statement", "statement", "session"]
+    else:
+        assert attempts == ["portal", "statement"]
+        assert closed == ["portal", "statement", "session"]
+
+
 async def test_server_cancellation_does_not_interrupt_pending_cleanup() -> None:
     closed: list[str] = []
     portal_close_started = asyncio.Event()
@@ -1205,7 +1346,7 @@ async def test_server_cancellation_does_not_interrupt_pending_cleanup() -> None:
         writer.close()
         await writer.wait_closed()
         await asyncio.wait_for(portal_close_started.wait(), 2)
-    allow_portal_close.set()
+        allow_portal_close.set()
     await asyncio.wait_for(done.wait(), 2)
     assert closed == ["portal", "statement", "session"]
 

@@ -53,6 +53,7 @@ client is then trusted.
 from __future__ import annotations
 
 import abc
+import asyncio
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -102,8 +103,13 @@ async def serve(
     `pyo3-async-runtimes` Future directly) makes the entry point work
     with `asyncio.create_task` and `asyncio.run` without
     `ensure_future`.
+
+    Cancellation stops accepting connections and waits for their async
+    portal/statement cleanup before returning. Cleanup callbacks must finish;
+    repeated cancellation does not interrupt them.
     """
-    await _serve(
+    shutdown = asyncio.Event()
+    running = _serve(
         simple_query,
         addr,
         auth=auth,
@@ -114,7 +120,19 @@ async def serve(
         tls_key=tls.key if tls else None,
         require_tls=tls.require if tls else False,
         scram_iterations=scram_iterations,
+        _shutdown=shutdown,
     )
+    try:
+        await asyncio.shield(running)
+    except asyncio.CancelledError:
+        shutdown.set()
+        while not running.done():
+            try:
+                await asyncio.shield(running)
+            except asyncio.CancelledError:
+                continue
+        running.result()
+        raise
 
 
 __all__ = ["SessionFactory", "TLSConfig", "serve"]

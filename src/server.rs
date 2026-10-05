@@ -55,6 +55,7 @@ use pyo3::prelude::*;
 use pyo3_async_runtimes::tokio as pyo3_tokio;
 use rustls_pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer};
 use tokio::net::TcpListener;
+use tokio::sync::watch;
 use tokio::task::JoinSet;
 
 use crate::auth::{PyAuthSource, PyLoginInfo};
@@ -404,7 +405,7 @@ fn load_tls(cert_path: &str, key_path: &str) -> PyResult<(TlsAcceptor, Arc<Vec<u
 /// cancel via `asyncio.Task.cancel` to stop.
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
-#[pyo3(signature = (simple_query, addr, *, auth = None, extended = None, session_factory = None, auth_method = "cleartext", tls_cert = None, tls_key = None, require_tls = false, scram_iterations = 4096))]
+#[pyo3(signature = (simple_query, addr, *, auth = None, extended = None, session_factory = None, auth_method = "cleartext", tls_cert = None, tls_key = None, require_tls = false, scram_iterations = 4096, _shutdown = None))]
 fn serve<'py>(
     py: Python<'py>,
     simple_query: Bound<'py, PyAny>,
@@ -417,6 +418,7 @@ fn serve<'py>(
     tls_key: Option<String>,
     require_tls: bool,
     scram_iterations: usize,
+    _shutdown: Option<Py<PyAny>>,
 ) -> PyResult<Bound<'py, PyAny>> {
     let socket_addr = SocketAddr::from_str(&addr).map_err(|e| {
         pyo3::exceptions::PyValueError::new_err(format!("invalid address {addr:?}: {e}"))
@@ -508,6 +510,22 @@ fn serve<'py>(
         let listener = TcpListener::bind(socket_addr).await.map_err(|e| {
             pyo3::exceptions::PyOSError::new_err(format!("bind {socket_addr} failed: {e}"))
         })?;
+        let shutdown = async {
+            if let Some(event) = _shutdown {
+                let future = Python::attach(|py| {
+                    pyo3_async_runtimes::into_future_with_locals(
+                        &task_locals,
+                        event.bind(py).call_method0("wait")?,
+                    )
+                })?;
+                future.await?;
+            } else {
+                std::future::pending::<()>().await;
+            }
+            Ok::<(), PyErr>(())
+        };
+        tokio::pin!(shutdown);
+        let (stop_connections, _) = watch::channel(false);
         let mut connections = JoinSet::new();
         loop {
             // Defensive: accept-loop IO failures (e.g. fd exhaustion)
@@ -515,6 +533,10 @@ fn serve<'py>(
             // reliably triggering a mid-listen accept failure from a
             // test isn't worth the contortion.
             let (sock, _peer) = tokio::select! {
+                result = &mut shutdown => {
+                    result?;
+                    break;
+                }
                 result = listener.accept() => result.map_err(|e|
                     pyo3::exceptions::PyOSError::new_err(format!("accept failed: {e}")))?, // LCOV_EXCL_LINE
                 _ = connections.join_next(), if !connections.is_empty() => continue,
@@ -526,18 +548,26 @@ fn serve<'py>(
                 .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))?;
             let handlers = Arc::new(handlers);
             let tls_acceptor = tls_acceptor.clone();
+            let mut stop = stop_connections.subscribe();
             connections.spawn(async move {
                 let _ = pyo3_tokio::scope(locals, async move {
-                    let result = process_socket(sock, tls_acceptor, handlers).await;
+                    tokio::select! {
+                        _ = async {
+                            let _ = stop.changed().await;
+                            // Keep polling process_socket until an in-flight protocol
+                            // Close has finished and removed its resource entry.
+                            let _closing = resources.closing.lock().await;
+                        } => {},
+                        _ = process_socket(sock, tls_acceptor, handlers) => {},
+                    }
                     resources.cleanup().await;
-                    result
                 })
                 .await;
             });
         }
-        // Unreachable; the loop body never breaks. The type annotation
-        // tells the compiler what the future's Output is.
-        #[allow(unreachable_code)]
+        drop(listener);
+        stop_connections.send_replace(true);
+        while connections.join_next().await.is_some() {}
         Ok::<(), PyErr>(())
     })
 }
