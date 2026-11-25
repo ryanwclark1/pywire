@@ -14,8 +14,10 @@ native extension owns socket processing and calls Python handlers through
 - Hold connection-specific Python state per connection. Parsed statements and
   bound portals survive the matching extended-query phases; Close, Sync, and
   disconnect release the corresponding state.
-- Keep public `.pyi` files aligned with runtime behavior and verify them with
-  strict type checking.
+- Type the pure-Python modules inline and describe the native extension only
+  in the `pywire/_pywire/` stub package. CI checks both with mypy and pyright
+  in strict mode and compares the stubs with the built module using
+  `mypy.stubtest`; `stubtest-allowlist.txt` entries must explain themselves.
 - Match the upstream pgwire major/minor version. Binding-only fixes increment
   pywire's patch version; consumers pin a tested Git commit.
 

@@ -21,8 +21,24 @@ Entries are maintained with each version change.
   first) from pgwire 0.42's TLS client info.
 - `TLSConfig.client_ca`: require and verify client certificates (mutual TLS).
 
+### Typing
+
+- One source of truth for types: the duplicate `pywire/*.pyi` stubs are gone,
+  so mypy now checks the real modules, and the native extension is described
+  by a complete stub package in `pywire/_pywire/`.
+- Stubs match the runtime exactly (`mypy.stubtest` reports no errors, down
+  from 176): native classes are `@final`, constructors are typed as
+  `__new__`, attributes are read-only properties, and `TransactionStatus` is
+  no longer misdescribed as an `enum.Enum`.
+- New `pywire.query.ResponseKind` literal type for `Response.kind`.
+- Dataclass list fields no longer appear as `list[Unknown]` to pyright.
+- CI runs stubtest and pyright (strict) alongside mypy.
+
 ### Changed
 
+- Frozen value classes (`FieldInfo`, `LoginInfo`, `Password`, every message
+  codec, `FieldDescription` and `TransactionStatus`) are now hashable,
+  consistent with their equality.
 - The stored-verifier SCRAM handler rejects a non-empty `a=` authorization
   identity, matching pgwire 0.42 and PostgreSQL.
 

@@ -36,8 +36,8 @@ use crate::errors::{py_err_to_pywire, pywire_to_py_err};
 /// extracted from the connection's startup parameters, plus the TLS SNI
 /// server name and client certificate chain when the connection is
 /// secured.
-#[pyclass(name = "LoginInfo", module = "pywire.auth", frozen, eq)]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[pyclass(name = "LoginInfo", module = "pywire.auth", frozen, eq, hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct PyLoginInfo {
     #[pyo3(get)]
     pub user: Option<String>,
@@ -61,7 +61,7 @@ impl PyLoginInfo {
         host = String::from("127.0.0.1"),
         sni_server_name = None,
         client_certificates = Vec::new(),
-    ))]
+    ), text_signature = "(*, user=None, database=None, host='127.0.0.1', sni_server_name=None, client_certificates=())")]
     fn new(
         user: Option<String>,
         database: Option<String>,
@@ -121,8 +121,15 @@ impl PyLoginInfo {
 
 /// Password material returned by an `AuthSource`. `salt` is `None` for
 /// cleartext auth and `Some` for salted/hashed schemes (e.g. MD5).
-#[pyclass(name = "Password", module = "pywire.auth", frozen, eq, from_py_object)]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[pyclass(
+    name = "Password",
+    module = "pywire.auth",
+    frozen,
+    eq,
+    hash,
+    from_py_object
+)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct PyPassword {
     password: Vec<u8>,
     salt: Option<Vec<u8>>,

@@ -1,4 +1,50 @@
-__all__: list[str]
+from typing import final
+
+__all__ = [
+    "Error",
+    "ProtocolError",
+    "UnsupportedProtocolVersion",
+    "InvalidCancelRequest",
+    "InvalidMessageType",
+    "MessageTooLarge",
+    "InvalidElementCount",
+    "InvalidTargetType",
+    "InvalidTransactionStatus",
+    "InvalidSSLRequestMessage",
+    "InvalidGssEncRequestMessage",
+    "InvalidStartupMessage",
+    "InvalidAuthenticationMessageCode",
+    "InvalidSecretKey",
+    "NotReadyForQuery",
+    "InvalidOptionValue",
+    "InvalidMessageLength",
+    "TruncatedMessage",
+    "AuthError",
+    "FailedToCoercePasswordMessage",
+    "InvalidSASLState",
+    "UnsupportedSASLAuthMethod",
+    "InvalidScramMessage",
+    "InvalidPassword",
+    "UnsupportedCertificateSignatureAlgorithm",
+    "UserNameRequired",
+    "InvalidOauthMessage",
+    "OAuthAuthenticationFailed",
+    "OAuthValidationError",
+    "OauthAuthzIdError",
+    "NoAuthenticationInProgress",
+    "PortalNotFound",
+    "PortalNotStarted",
+    "StatementNotFound",
+    "ParameterIndexOutOfBound",
+    "InvalidRustTypeForParameter",
+    "FailedToParseParameter",
+    "QueryCanceled",
+    "ApiError",
+    "UserError",
+    "ErrorInfo",
+    "_test_raise_for",
+    "_test_py_err_to_pywire_tag",
+]
 
 class Error(Exception):
     """Base class for every pywire-defined exception."""
@@ -47,34 +93,54 @@ class QueryCanceled(Error): ...
 class ApiError(Error): ...
 class UserError(Error): ...
 
+@final
 class ErrorInfo:
     """PostgreSQL error/notice field set.
 
     Mirrors `pgwire::error::ErrorInfo`. Field names follow the
-    PostgreSQL protocol error-fields reference one-to-one.
+    PostgreSQL protocol error-fields reference one-to-one: `severity`
+    (`ERROR`, `FATAL`, ...), `code` (the five-character SQLSTATE) and
+    `message` are required; the rest are optional.
     """
 
-    severity: str
-    code: str
-    message: str
-    detail: str | None
-    hint: str | None
-    position: str | None
-    internal_position: str | None
-    internal_query: str | None
-    where_context: str | None
-    file_name: str | None
-    line: int | None
-    routine: str | None
-    severity_nonlocalized: str | None
-    schema: str | None
-    table: str | None
-    column: str | None
-    datatype: str | None
-    constraint: str | None
-
-    def __init__(
-        self,
+    @property
+    def severity(self) -> str: ...
+    @property
+    def code(self) -> str: ...
+    @property
+    def message(self) -> str: ...
+    @property
+    def detail(self) -> str | None: ...
+    @property
+    def hint(self) -> str | None: ...
+    @property
+    def position(self) -> str | None: ...
+    @property
+    def internal_position(self) -> str | None: ...
+    @property
+    def internal_query(self) -> str | None: ...
+    @property
+    def where_context(self) -> str | None: ...
+    @property
+    def file_name(self) -> str | None: ...
+    @property
+    def line(self) -> int | None: ...
+    @property
+    def routine(self) -> str | None: ...
+    @property
+    def severity_nonlocalized(self) -> str | None: ...
+    @property
+    def schema(self) -> str | None: ...
+    @property
+    def table(self) -> str | None: ...
+    @property
+    def column(self) -> str | None: ...
+    @property
+    def datatype(self) -> str | None: ...
+    @property
+    def constraint(self) -> str | None: ...
+    def __new__(
+        cls,
         severity: str,
         code: str,
         message: str,
@@ -94,6 +160,9 @@ class ErrorInfo:
         column: str | None = None,
         datatype: str | None = None,
         constraint: str | None = None,
-    ) -> None: ...
+    ) -> ErrorInfo: ...
     def is_fatal(self) -> bool:
         """True when `severity == 'FATAL'`."""
+
+def _test_raise_for(variant: str) -> None: ...
+def _test_py_err_to_pywire_tag(exc: BaseException) -> str: ...

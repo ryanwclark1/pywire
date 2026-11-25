@@ -30,8 +30,8 @@ import pytest
 
 import pywire
 from pywire import auth, errors, messages, query, server
-from pywire._pywire import _test_bind_ephemeral  # type: ignore[attr-defined]
-from pywire._pywire import serve as _native_serve  # type: ignore[attr-defined]
+from pywire._pywire import _test_bind_ephemeral
+from pywire._pywire import serve as _native_serve
 
 
 def test_server_is_exposed_under_pywire():

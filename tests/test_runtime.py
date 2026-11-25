@@ -22,7 +22,7 @@ import time
 
 import pytest
 
-from pywire._pywire import (  # type: ignore[attr-defined]
+from pywire._pywire import (
     _test_async_add,
     _test_async_sleep,
     _test_await_python_coro,

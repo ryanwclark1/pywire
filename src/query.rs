@@ -44,9 +44,10 @@ use crate::errors::{py_err_to_pywire, PyErrorInfo};
     module = "pywire.query",
     frozen,
     eq,
+    hash,
     from_py_object
 )]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct PyFieldInfo {
     #[pyo3(get)]
     pub name: String,
@@ -215,7 +216,10 @@ impl PyResponse {
     /// A cell is either `bytes` (the text-format representation of the
     /// value, e.g. `b"42"` for an int4) or `None` for SQL NULL.
     #[classmethod]
-    #[pyo3(signature = (fields, rows, *, command_tag = String::from("SELECT")))]
+    #[pyo3(
+        signature = (fields, rows, *, command_tag = String::from("SELECT")),
+        text_signature = "(fields, rows, *, command_tag='SELECT')"
+    )]
     fn query(
         _cls: &Bound<'_, PyType>,
         fields: Vec<PyFieldInfo>,
@@ -235,7 +239,10 @@ impl PyResponse {
     /// pulled only as pgwire is ready to write it, providing wire-level
     /// backpressure without materializing the full result set.
     #[classmethod]
-    #[pyo3(signature = (fields, rows, *, command_tag = String::from("SELECT")))]
+    #[pyo3(
+        signature = (fields, rows, *, command_tag = String::from("SELECT")),
+        text_signature = "(fields, rows, *, command_tag='SELECT')"
+    )]
     fn stream(
         _cls: &Bound<'_, PyType>,
         fields: Vec<PyFieldInfo>,

@@ -14,10 +14,10 @@ Three concerns:
 from __future__ import annotations
 
 import pytest
-from pywire._pywire.auth import _test_call_get_password  # type: ignore[import-not-found]
 
 import pywire
 from pywire import auth
+from pywire._pywire.auth import _test_call_get_password
 
 # ---- module shape -------------------------------------------------------
 

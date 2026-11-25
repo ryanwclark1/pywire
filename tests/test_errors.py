@@ -18,13 +18,13 @@ These tests are also responsible for the 100% Rust coverage on the
 from __future__ import annotations
 
 import pytest
-from pywire._pywire.errors import (  # type: ignore[import-not-found]
-    _test_py_err_to_pywire_tag,
-    _test_raise_for,
-)
 
 import pywire
 from pywire import errors
+from pywire._pywire.errors import (
+    _test_py_err_to_pywire_tag,
+    _test_raise_for,
+)
 
 # ---- (1) class shape -----------------------------------------------------
 

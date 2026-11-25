@@ -30,7 +30,7 @@ class CopyInfo:
 
     direction: str
     binary: bool
-    column_formats: list[int] = field(default_factory=list)
+    column_formats: list[int] = field(default_factory=list[int])
 
 
 class CopyHandler(abc.ABC):
