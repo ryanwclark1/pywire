@@ -81,7 +81,9 @@ fail_under = 100
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-extend-exclude = ["target"]
+# Docs code fences hold `--8<--` snippet includes that ruff would mangle; the
+# included code lives in examples/, which ruff, mypy and pyright all check.
+extend-exclude = ["target", "docs/**/*.md"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]

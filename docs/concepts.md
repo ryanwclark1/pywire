@@ -32,10 +32,11 @@ Every steady-state message starts with a one-byte type tag, followed by a
 big-endian 32-bit length (inclusive of the length itself), followed by the
 body. Startup messages omit the type tag for historical reasons.
 
-pgwire decodes these into Rust enums; pywire surfaces them (when the
-bindings land) as Python classes whose fields correspond to the protocol
-fields one-to-one. There is no translation layer: the goal is to expose
-pgwire's semantics, not to invent new ones.
+pgwire decodes these into Rust enums; pywire surfaces them as Python
+classes in `pywire.messages` whose fields correspond to the protocol fields
+one-to-one (see [Wire messages](guides/messages.md)). There is no
+translation layer: the goal is to expose pgwire's semantics, not to invent
+new ones.
 
 ## Layered API
 
@@ -43,9 +44,9 @@ pgwire — and therefore pywire — is layered:
 
 | Layer       | What it is                                          | Best for                           |
 | ----------- | --------------------------------------------------- | ---------------------------------- |
-| `messages`  | Raw codecs for `PgWireFrontendMessage` / `PgWireBackendMessage` | tooling: proxies, fuzzers, dissectors |
-| `api`       | Handler traits (auth, simple query, extended query, COPY) | servers: implement the traits, plug them into a runtime |
-| `tokio`     | Server bootstrap on top of tokio                    | end-to-end use: bind a port and accept connections |
+| `messages`  | Raw codecs (`pywire.messages`)                     | tooling: proxies, fuzzers, dissectors |
+| `api`       | Handler traits (`pywire.auth`, `pywire.query`, `pywire.copy`) | servers: implement the handlers   |
+| `tokio`     | Server bootstrap (`pywire.server.serve`)            | end-to-end use: bind a port and accept connections |
 
 ## What pywire does not give you
 

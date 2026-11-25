@@ -46,6 +46,15 @@ Entries are maintained with each version change.
   checked against the build), and `Format.TEXT` / `Format.BINARY`. Both are
   re-exported as `pywire.Type` and `pywire.Format`.
 
+### Documentation
+
+- New project logo and brand palette for the docs site and README.
+- A user guide covering simple queries, types and formats, prepared
+  statements, sessions, streaming, COPY, errors, authentication, TLS, server
+  lifecycle, wire messages, testing and typing, plus a rewritten quickstart.
+- Ten runnable examples in `examples/`, included verbatim by the guide and
+  executed by the test suite.
+
 ### Typing
 
 - One source of truth for types: the duplicate `pywire/*.pyi` stubs are gone,

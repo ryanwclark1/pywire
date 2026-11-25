@@ -1,32 +1,55 @@
 # Quickstart
 
-Today pywire exposes a single function: the range of PostgreSQL
-wire-protocol versions supported by the wrapped pgwire crate. The binding
-surface will grow PR by PR — see the
-[binding strategy](https://github.com/ryanwclark1/pywire/blob/main/BINDING_STRATEGY.md)
-for the roadmap.
+This page builds a PostgreSQL-compatible server in about twenty lines and
+queries it with `psql`. It assumes pywire is [installed](install.md).
+
+## 1. Write a handler
+
+A handler receives SQL text and returns `Response` objects. pgwire turns
+them into PostgreSQL wire messages.
 
 ```python
-import pywire
-
-earliest, latest = pywire.supported_protocol_range()
-print(f"pywire wraps a pgwire that speaks protocol versions {earliest}..{latest}")
+--8<-- "examples/hello.py"
 ```
 
-That's it. As soon as more bindings land they'll show up under the
-[API reference](api.md).
+## 2. Run it
 
-## What's coming
+```bash
+python examples/hello.py          # listens on 127.0.0.1:5433
+```
 
-The next binding milestones, in priority order:
+Set `PYWIRE_ADDR=0.0.0.0:6543` to listen elsewhere.
 
-1. **Messages** — `PgWireBackendMessage` / `PgWireFrontendMessage` codecs.
-   You'll be able to encode and decode wire frames from Python.
-2. **Auth handlers** — a Python ABC mirroring pgwire's `StartupHandler`
-   trait, so you can plug your own authentication into a server.
-3. **Query handlers** — both the simple and extended query protocols.
-4. **Server bootstrap** — `pywire.serve(handler, addr)` for end-to-end use.
+## 3. Connect
 
-If you need any of these now, file an issue on
-[GitHub](https://github.com/ryanwclark1/pywire/issues) — interest helps us
-prioritize.
+Any PostgreSQL client works:
+
+```console
+$ psql "host=127.0.0.1 port=5433 sslmode=disable" -c "SELECT 1"
+   greeting
+--------------
+ hello, world
+(1 row)
+```
+
+or from Python:
+
+```python
+import psycopg
+
+with psycopg.connect("host=127.0.0.1 port=5433 sslmode=disable") as conn:
+    print(conn.execute("SELECT 1").fetchone())   # ('hello, world',)
+```
+
+## Where next
+
+- Return real data with the right [types and formats](guides/types-and-formats.md).
+- Support drivers' parameterized queries with
+  [prepared statements](guides/extended-query.md).
+- Add [authentication](guides/authentication.md) and [TLS](guides/tls.md)
+  before exposing a server.
+- Keep state per client with [sessions](guides/sessions.md).
+- Load and export data with [COPY](guides/copy.md).
+
+Every example in the user guide is in the repository's `examples/` directory
+and is run by the test suite.

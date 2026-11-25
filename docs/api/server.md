@@ -11,13 +11,14 @@ async task; queries flow through your simple and optional extended handlers.
 import asyncio
 import pywire
 from pywire.query import FieldInfo, Response, SimpleQueryHandler
+from pywire.types import Type
 
 
 class Hello(SimpleQueryHandler):
     async def do_query(self, query: str) -> list[Response]:
         return [
             Response.query(
-                fields=[FieldInfo("greeting", type_id=25)],
+                fields=[FieldInfo("greeting", type_id=Type.TEXT)],
                 rows=[[b"hello, world"]],
             ),
         ]
@@ -65,8 +66,9 @@ the reference password. A mismatch surfaces as
 
 ## SCRAM and TLS
 
-For SCRAM-SHA-256, return the salted password and salt expected by
-pgwire, and select `auth_method="scram-sha-256"`. TLS takes a PEM
+For SCRAM-SHA-256, return the salted password (PBKDF2-HMAC-SHA-256 with
+`scram_iterations` rounds) and its salt, and select
+`auth_method="scram-sha-256"`; see [Authentication](../guides/authentication.md). TLS takes a PEM
 certificate/key pair and can be required:
 
 ```python
@@ -128,7 +130,7 @@ synchronous `close()` method when the connection is released.
 from pywire.server import SessionFactory
 
 
-class Sessions(SessionFactory):
+class Sessions(SessionFactory[Hello]):
     async def open(self, login: LoginInfo) -> Hello:
         return Hello()
 
@@ -159,9 +161,9 @@ task.cancel()
 | Cleartext auth    | ✅ Pass an `AuthSource` subclass; pywire runs PostgreSQL's cleartext-password flow.     |
 | SCRAM auth        | ✅ SCRAM-SHA-256 and TLS channel binding via pgwire's ring backend.                    |
 | Extended query    | ✅ `Parse`/`Bind`/`Describe`/`Execute`, binary formats, and portal suspension.         |
-| COPY              | ⬜ Same — protocol error today; `pywire.copy.CopyHandler` ABC is in place.              |
+| COPY              | ✅ `Response.copy_in` / `Response.copy_out`; see [COPY](../guides/copy.md).            |
 | Cancel requests   | ✅ PostgreSQL cancel requests cancel the active query future.                           |
-| TLS               | ✅ PostgreSQL TLS negotiation with optional TLS-required policy.                        |
+| TLS               | ✅ PostgreSQL TLS negotiation, TLS-required policy and mutual TLS (`client_ca`).       |
 
 ## Errors that reach the wire
 
@@ -184,9 +186,10 @@ return `Response.error(ErrorInfo(...))` from `do_query` and let other
 ## What `serve` returns
 
 `serve()` is an `async def` that runs until cancelled. Cancellation
-closes the listener and aborts active connection tasks. The optional
+closes the listener, waits for the async statement and portal cleanup of
+every connection, and then re-raises `CancelledError`. The optional
 synchronous session `close()` callback runs when each task releases its
-session.
+session. See [Server lifecycle](../guides/lifecycle.md).
 
 ## Reference
 

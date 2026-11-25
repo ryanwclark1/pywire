@@ -31,11 +31,15 @@ from pywire.types import Format, Type
 USERS = {1: "alice", 2: "bob"}
 
 
+# --8<-- [start:decode_int]
 def decode_int(value: bytes, fmt: int) -> int:
     """Decode an integer parameter sent in text or binary format."""
     if fmt == Format.BINARY:
         return int.from_bytes(value, "big", signed=True)  # int2/int4/int8
     return int(value.decode())
+
+
+# --8<-- [end:decode_int]
 
 
 def name_field(result_formats: list[int]) -> FieldInfo:

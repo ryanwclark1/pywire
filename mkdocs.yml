@@ -56,7 +56,13 @@ markdown_extensions:
   - pymdownx.highlight:
       anchor_linenums: true
   - pymdownx.inlinehilite
-  - pymdownx.snippets
+  - pymdownx.snippets:
+      base_path: ["."]
+      check_paths: true
+  - pymdownx.tabbed:
+      alternate_style: true
+  - attr_list
+  - md_in_html
   - toc:
       permalink: true
 
@@ -65,13 +71,31 @@ nav:
   - Install: install.md
   - Quickstart: quickstart.md
   - Wire protocol concepts: concepts.md
+  - User guide:
+      - Simple queries: guides/simple-queries.md
+      - Types and formats: guides/types-and-formats.md
+      - Prepared statements: guides/extended-query.md
+      - Per-connection sessions: guides/sessions.md
+      - Streaming results: guides/streaming.md
+      - COPY: guides/copy.md
+      - Errors: guides/errors.md
+      - Authentication: guides/authentication.md
+      - TLS: guides/tls.md
+      - Server lifecycle: guides/lifecycle.md
+      - Wire messages: guides/messages.md
+      - Testing your server: guides/testing.md
+      - Typing: guides/typing.md
   - API reference:
       - Overview: api.md
+      - Server: api/server.md
+      - Query: api/query.md
+      - Sessions: api/session.md
+      - Types: api/types.md
+      - COPY: api/copy.md
+      - Auth: api/auth.md
       - Errors: api/errors.md
       - Messages: api/messages.md
-      - Auth: api/auth.md
-      - Query: api/query.md
-      - Server: api/server.md
+      - Sync: api/sync.md
   - Versioning: versioning.md
   - Releasing: releasing.md
   - Contributing: contributing.md
