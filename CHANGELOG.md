@@ -2,6 +2,30 @@
 
 Entries are maintained with each version change.
 
+## 0.42.0 — pgwire 0.42 migration
+
+### Upstream
+
+- Wrap pgwire 0.42.3, pyo3 0.30 and pyo3-async-runtimes 0.30. This picks up
+  pgwire's fix for GHSA-95f6-gpr7-g65r (plaintext sent between `SSLRequest`
+  and the TLS handshake is no longer carried across the upgrade), stricter
+  SCRAM validation, per-connection auth state, and errors instead of panics
+  on truncated frames.
+
+### Added
+
+- `pywire.errors.InvalidMessageLength`, `TruncatedMessage` (both
+  `ProtocolError`) and `NoAuthenticationInProgress` (`AuthError`), mirroring
+  the new upstream `PgWireError` variants.
+- `LoginInfo.sni_server_name` and `LoginInfo.client_certificates` (DER, leaf
+  first) from pgwire 0.42's TLS client info.
+- `TLSConfig.client_ca`: require and verify client certificates (mutual TLS).
+
+### Changed
+
+- The stored-verifier SCRAM handler rejects a non-empty `a=` authorization
+  identity, matching pgwire 0.42 and PostgreSQL.
+
 ## 0.41.0 — pgwire 0.41 migration
 
 - Wrap pgwire 0.41.0, including PostgreSQL-compatible empty prepared statements.

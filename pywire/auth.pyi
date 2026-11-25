@@ -8,13 +8,17 @@ class LoginInfo:
     user: str | None
     database: str | None
     host: str
-
+    sni_server_name: str | None
+    @property
+    def client_certificates(self) -> list[bytes]: ...
     def __init__(
         self,
         *,
         user: str | None = None,
         database: str | None = None,
         host: str = "127.0.0.1",
+        sni_server_name: str | None = None,
+        client_certificates: list[bytes] = ...,
     ) -> None: ...
     def __eq__(self, other: object) -> bool: ...
     def __hash__(self) -> int: ...

@@ -21,7 +21,7 @@ pywire = { git = "https://github.com/ryanwclark1/pywire.git", rev = "<full-commi
 ```
 
 A Git installation builds the native extension locally. It requires Python
-3.11 or newer, a Rust toolchain (at least Rust 1.89 for pgwire 0.41), and a
+3.11 or newer, a Rust toolchain (at least Rust 1.89 for pgwire 0.42), and a
 working C compiler. The tagged build workflow also validates wheels for
 Linux, macOS, and Windows, but those artifacts are not the distribution path.
 

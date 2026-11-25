@@ -23,7 +23,8 @@ native extension owns socket processing and calls Python handlers through
 
 `pywire.server.serve` supports TCP connections, simple queries, optional
 extended-query handlers, per-connection sessions, cleartext and SCRAM-SHA-256
-authentication, TLS, cancel requests, and streaming query responses. The
+authentication, TLS (including mutual TLS via `TLSConfig.client_ca`), cancel
+requests, and streaming query responses. The
 synchronous `pywire.sync.serve_forever` is a convenience wrapper. `pywire.errors`
 mirrors upstream error variants; `pywire.messages` exposes a foundational
 subset of frontend and backend codecs.

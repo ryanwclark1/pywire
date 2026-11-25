@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
+import ssl
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import cast
@@ -1571,6 +1572,58 @@ async def test_scram_tls_and_extended_fallback_with_psycopg():
                 return connection.execute("SELECT 1").fetchall()
 
         assert await asyncio.to_thread(query_over_tls) == [(1,)]
+
+
+async def test_mutual_tls_exposes_sni_and_client_certificate():
+    fixtures = Path(__file__).parent / "fixtures"
+    tls = server.TLSConfig(
+        str(fixtures / "server.crt"),
+        str(fixtures / "server.key"),
+        client_ca=str(fixtures / "client-ca.crt"),
+    )
+    logins: list[auth.LoginInfo] = []
+
+    class Recording(auth.AuthSource):
+        async def get_password(self, login: auth.LoginInfo) -> auth.Password:
+            logins.append(login)
+            return auth.Password(b"secret")
+
+    class One(query.SimpleQueryHandler):
+        async def do_query(self, q: str) -> list[query.Response]:
+            return [query.Response.query([query.FieldInfo("one", type_id=23)], [[b"1"]])]
+
+    async with _running_server(One(), auth_source=Recording(), tls=tls) as port:
+        base = f"host=localhost hostaddr=127.0.0.1 port={port} user=alice password=secret"
+
+        def connect(extra: str) -> list[tuple[int]]:
+            with psycopg.connect(f"{base} sslmode=require {extra}") as connection:
+                return connection.execute("SELECT 1").fetchall()
+
+        # Without a client certificate the TLS handshake is refused.
+        with pytest.raises(psycopg.OperationalError):
+            await asyncio.to_thread(connect, "")
+        certificate = f"sslcert={fixtures / 'client.crt'} sslkey={fixtures / 'client.key'}"
+        assert await asyncio.to_thread(connect, certificate) == [(1,)]
+
+    login = logins[-1]
+    assert login.sni_server_name == "localhost"
+    expected = ssl.PEM_cert_to_DER_cert((fixtures / "client.crt").read_text())
+    assert login.client_certificates[0] == expected
+    assert "1 certificate(s)" in repr(login)
+
+
+async def test_serve_validates_client_ca() -> None:
+    fixtures = Path(__file__).parent / "fixtures"
+    with pytest.raises(ValueError, match="tls_client_ca requires"):
+        _native_serve(_DummyHandler(), "127.0.0.1:1", tls_client_ca="ca.crt")
+    with pytest.raises(OSError, match="TLS client CA"):
+        await server.serve(
+            _DummyHandler(),
+            "127.0.0.1:1",
+            tls=server.TLSConfig(
+                str(fixtures / "server.crt"), str(fixtures / "server.key"), client_ca="missing.crt"
+            ),
+        )
 
 
 async def test_cleartext_auth_accepts_correct_password():

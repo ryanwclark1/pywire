@@ -57,6 +57,8 @@ PROTOCOL_ERROR_CLASSES = [
     errors.InvalidSecretKey,
     errors.NotReadyForQuery,
     errors.InvalidOptionValue,
+    errors.InvalidMessageLength,
+    errors.TruncatedMessage,
 ]
 
 AUTH_ERROR_CLASSES = [
@@ -71,6 +73,7 @@ AUTH_ERROR_CLASSES = [
     errors.OAuthAuthenticationFailed,
     errors.OAuthValidationError,
     errors.OauthAuthzIdError,
+    errors.NoAuthenticationInProgress,
 ]
 
 DIRECT_ERROR_CLASSES = [
@@ -152,6 +155,9 @@ BOUNDARY_VARIANTS = [
     ("OAuthAuthenticationFailed", errors.OAuthAuthenticationFailed),
     ("OAuthValidationError", errors.OAuthValidationError),
     ("OauthAuthzIdError", errors.OauthAuthzIdError),
+    ("InvalidMessageLength", errors.InvalidMessageLength),
+    ("TruncatedMessage", errors.TruncatedMessage),
+    ("NoAuthenticationInProgress", errors.NoAuthenticationInProgress),
     ("ApiError", errors.ApiError),
     ("UserError", errors.UserError),
 ]
@@ -201,6 +207,7 @@ PY_TO_PG_VARIANTS = [
     ("OAuthAuthenticationFailed", "OAuthAuthenticationFailed"),
     ("OAuthValidationError", "OAuthValidationError"),
     ("OauthAuthzIdError", "OauthAuthzIdError"),
+    ("NoAuthenticationInProgress", "NoAuthenticationInProgress"),
     # Variants carrying typed payloads we can't reconstruct from a
     # Python exception — fall back to ApiError but keep the message.
     ("UnsupportedProtocolVersion", "ApiError"),

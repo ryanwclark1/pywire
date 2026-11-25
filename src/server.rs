@@ -49,7 +49,9 @@ use pgwire::messages::response::TransactionStatus;
 use pgwire::messages::simplequery::Query;
 use pgwire::messages::{PgWireBackendMessage, PgWireFrontendMessage};
 use pgwire::tokio::process_socket;
-use pgwire::tokio::tokio_rustls::rustls::ServerConfig;
+use pgwire::tokio::tokio_rustls::rustls::server::danger::ClientCertVerifier;
+use pgwire::tokio::tokio_rustls::rustls::server::WebPkiClientVerifier;
+use pgwire::tokio::tokio_rustls::rustls::{RootCertStore, ServerConfig};
 use pgwire::tokio::TlsAcceptor;
 use pyo3::prelude::*;
 use pyo3_async_runtimes::tokio as pyo3_tokio;
@@ -366,7 +368,29 @@ impl HandlerConfig {
     }
 }
 
-fn load_tls(cert_path: &str, key_path: &str) -> PyResult<(TlsAcceptor, Arc<Vec<u8>>)> {
+/// Build a rustls verifier that requires a client certificate chaining to
+/// one of the PEM certificates in `ca_path` (mutual TLS).
+fn load_client_verifier(ca_path: &str) -> PyResult<Arc<dyn ClientCertVerifier>> {
+    let value_error = |error: String| pyo3::exceptions::PyValueError::new_err(error);
+    let mut roots = RootCertStore::empty();
+    for certificate in CertificateDer::pem_file_iter(ca_path).map_err(|error| {
+        pyo3::exceptions::PyOSError::new_err(format!("read TLS client CA {ca_path:?}: {error}"))
+    })? {
+        let certificate = certificate.map_err(|error| value_error(error.to_string()))?;
+        roots
+            .add(certificate)
+            .map_err(|error| value_error(error.to_string()))?;
+    }
+    WebPkiClientVerifier::builder(Arc::new(roots))
+        .build()
+        .map_err(|error| value_error(format!("TLS client CA {ca_path:?}: {error}")))
+}
+
+fn load_tls(
+    cert_path: &str,
+    key_path: &str,
+    client_ca_path: Option<&str>,
+) -> PyResult<(TlsAcceptor, Arc<Vec<u8>>)> {
     let certificate_pem = std::fs::read(cert_path).map_err(|error| {
         pyo3::exceptions::PyOSError::new_err(format!("read TLS certificate {cert_path:?}: {error}"))
     })?;
@@ -379,8 +403,12 @@ fn load_tls(cert_path: &str, key_path: &str) -> PyResult<(TlsAcceptor, Arc<Vec<u
     })?;
     let key = PrivateKeyDer::from_pem_slice(&key_pem)
         .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
-    let mut config = ServerConfig::builder()
-        .with_no_client_auth()
+    let builder = ServerConfig::builder();
+    let builder = match client_ca_path {
+        Some(path) => builder.with_client_cert_verifier(load_client_verifier(path)?),
+        None => builder.with_no_client_auth(),
+    };
+    let mut config = builder
         .with_single_cert(certificates, key)
         .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
     config.alpn_protocols = vec![b"postgresql".to_vec()];
@@ -405,7 +433,7 @@ fn load_tls(cert_path: &str, key_path: &str) -> PyResult<(TlsAcceptor, Arc<Vec<u
 /// cancel via `asyncio.Task.cancel` to stop.
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
-#[pyo3(signature = (simple_query, addr, *, auth = None, extended = None, session_factory = None, auth_method = "cleartext", tls_cert = None, tls_key = None, require_tls = false, scram_iterations = 4096, _shutdown = None))]
+#[pyo3(signature = (simple_query, addr, *, auth = None, extended = None, session_factory = None, auth_method = "cleartext", tls_cert = None, tls_key = None, require_tls = false, tls_client_ca = None, scram_iterations = 4096, _shutdown = None))]
 fn serve<'py>(
     py: Python<'py>,
     simple_query: Bound<'py, PyAny>,
@@ -417,6 +445,7 @@ fn serve<'py>(
     tls_cert: Option<String>,
     tls_key: Option<String>,
     require_tls: bool,
+    tls_client_ca: Option<String>,
     scram_iterations: usize,
     _shutdown: Option<Py<PyAny>>,
 ) -> PyResult<Bound<'py, PyAny>> {
@@ -453,8 +482,13 @@ fn serve<'py>(
     }
     let (tls_acceptor, tls_certificate_pem) = match (tls_cert, tls_key) {
         (Some(cert), Some(key)) => {
-            let (acceptor, pem) = load_tls(&cert, &key)?;
+            let (acceptor, pem) = load_tls(&cert, &key, tls_client_ca.as_deref())?;
             (Some(acceptor), Some(pem))
+        }
+        (None, None) if tls_client_ca.is_some() => {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "tls_client_ca requires tls_cert and tls_key",
+            ));
         }
         (None, None) if !require_tls => (None, None),
         (None, None) => {

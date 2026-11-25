@@ -33,14 +33,10 @@ use crate::errors::{py_err_to_pywire, pywire_to_py_err};
 // ---------- LoginInfo --------------------------------------------------
 
 /// User-facing login info: the user, database, and client host
-/// extracted from the connection's startup parameters.
-#[pyclass(
-    name = "LoginInfo",
-    module = "pywire.auth",
-    frozen,
-    eq,
-    skip_from_py_object
-)]
+/// extracted from the connection's startup parameters, plus the TLS SNI
+/// server name and client certificate chain when the connection is
+/// secured.
+#[pyclass(name = "LoginInfo", module = "pywire.auth", frozen, eq)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PyLoginInfo {
     #[pyo3(get)]
@@ -49,24 +45,58 @@ pub struct PyLoginInfo {
     pub database: Option<String>,
     #[pyo3(get)]
     pub host: String,
+    #[pyo3(get)]
+    pub sni_server_name: Option<String>,
+    /// DER-encoded client certificate chain, leaf first.
+    pub client_certificates: Vec<Vec<u8>>,
 }
 
 #[pymethods]
 impl PyLoginInfo {
     #[new]
-    #[pyo3(signature = (*, user = None, database = None, host = String::from("127.0.0.1")))]
-    fn new(user: Option<String>, database: Option<String>, host: String) -> Self {
+    #[pyo3(signature = (
+        *,
+        user = None,
+        database = None,
+        host = String::from("127.0.0.1"),
+        sni_server_name = None,
+        client_certificates = Vec::new(),
+    ))]
+    fn new(
+        user: Option<String>,
+        database: Option<String>,
+        host: String,
+        sni_server_name: Option<String>,
+        client_certificates: Vec<Vec<u8>>,
+    ) -> Self {
         Self {
             user,
             database,
             host,
+            sni_server_name,
+            client_certificates,
         }
+    }
+
+    /// DER-encoded client certificates (leaf first); empty unless the
+    /// server requested client certificates and the client sent some.
+    #[getter]
+    fn client_certificates<'py>(&self, py: Python<'py>) -> Vec<Bound<'py, PyBytes>> {
+        self.client_certificates
+            .iter()
+            .map(|der| PyBytes::new(py, der))
+            .collect()
     }
 
     fn __repr__(&self) -> String {
         format!(
-            "LoginInfo(user={:?}, database={:?}, host={:?})",
-            self.user, self.database, self.host
+            "LoginInfo(user={:?}, database={:?}, host={:?}, sni_server_name={:?}, \
+             client_certificates=<{} certificate(s)>)",
+            self.user,
+            self.database,
+            self.host,
+            self.sni_server_name,
+            self.client_certificates.len()
         )
     }
 }
@@ -78,6 +108,11 @@ impl PyLoginInfo {
             user: info.user().map(str::to_owned),
             database: info.database().map(str::to_owned),
             host: info.host().to_owned(),
+            sni_server_name: info.sni_server_name().map(str::to_owned),
+            client_certificates: info
+                .client_certificates()
+                .map(|chain| chain.iter().map(|der| der.as_ref().to_vec()).collect())
+                .unwrap_or_default(),
         }
     }
 }
@@ -254,5 +289,7 @@ mod tests {
         assert_eq!(info.user.as_deref(), Some("alice"));
         assert_eq!(info.database.as_deref(), Some("postgres"));
         assert_eq!(info.host, "10.0.0.1");
+        assert_eq!(info.sni_server_name, None);
+        assert!(info.client_certificates.is_empty());
     }
 }

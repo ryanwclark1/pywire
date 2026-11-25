@@ -64,11 +64,20 @@ from pywire.query import ExtendedQueryHandler, SimpleQueryHandler
 
 @dataclass(frozen=True)
 class TLSConfig:
-    """PEM certificate/key pair used for PostgreSQL TLS negotiation."""
+    """PEM certificate/key pair used for PostgreSQL TLS negotiation.
+
+    `cert` and `key` are paths to the server's PEM certificate chain and
+    private key. With `require=True` (the default) plaintext connections
+    are refused after startup. Set `client_ca` to a PEM bundle path to
+    require mutual TLS: every client must present a certificate that
+    chains to one of those CAs, and the verified chain is exposed to auth
+    and session code as `LoginInfo.client_certificates`.
+    """
 
     cert: str
     key: str
     require: bool = True
+    client_ca: str | None = None
 
 
 class SessionFactory(abc.ABC):
@@ -119,6 +128,7 @@ async def serve(
         tls_cert=tls.cert if tls else None,
         tls_key=tls.key if tls else None,
         require_tls=tls.require if tls else False,
+        tls_client_ca=tls.client_ca if tls else None,
         scram_iterations=scram_iterations,
         _shutdown=shutdown,
     )

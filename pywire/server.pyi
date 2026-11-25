@@ -12,6 +12,7 @@ class TLSConfig:
     cert: str
     key: str
     require: bool = True
+    client_ca: str | None = None
 
 class SessionFactory(abc.ABC):
     @abc.abstractmethod
