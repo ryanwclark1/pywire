@@ -95,7 +95,7 @@ def check_errors() -> None:
         assert_type(error, errors.ProtocolError)
 
 
-_kinds: list[
-    Literal["empty", "execution", "query", "stream", "error", "copy_in", "copy_out"]
-] = ["query"]
+_kinds: list[Literal["empty", "execution", "query", "stream", "error", "copy_in", "copy_out"]] = [
+    "query"
+]
 _also: list[query.ResponseKind] = _kinds

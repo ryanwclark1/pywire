@@ -4,3 +4,4 @@
 # runtime object is a `typing.Literal` alias; stubtest cannot compare them.
 pywire\.query\.ResponseKind
 pywire\.server\.AuthMethod
+pywire\.messages\.AuthenticationKind

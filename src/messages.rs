@@ -22,8 +22,8 @@
 //!   `pywire.errors.ProtocolError` on malformed input)
 //! - `__eq__` and a `__repr__` that includes every field
 //!
-//! Extended-query / COPY / startup-handshake messages land in later PRs;
-//! see `BINDING_STRATEGY.md`.
+//! Extended-query, COPY, startup/auth and notice messages live in
+//! `crate::messages_ext` and register into the same Python module.
 
 use bytes::BytesMut;
 use pgwire::messages::{
@@ -48,13 +48,16 @@ use crate::errors::pywire_to_py_err;
 
 // ---------- shared codec helpers ----------------------------------------
 
-fn encode_to_pybytes<'py, T: Message>(py: Python<'py>, msg: &T) -> PyResult<Bound<'py, PyBytes>> {
+pub(crate) fn encode_to_pybytes<'py, T: Message>(
+    py: Python<'py>,
+    msg: &T,
+) -> PyResult<Bound<'py, PyBytes>> {
     let mut buf = BytesMut::new();
     msg.encode(&mut buf).map_err(pywire_to_py_err)?;
     Ok(PyBytes::new(py, &buf))
 }
 
-fn decode_from_slice<T: Message>(data: &[u8]) -> PyResult<T> {
+pub(crate) fn decode_from_slice<T: Message>(data: &[u8]) -> PyResult<T> {
     let mut buf = BytesMut::from(data);
     let ctx = DecodeContext::default();
     match T::decode(&mut buf, &ctx).map_err(pywire_to_py_err)? {
@@ -555,6 +558,7 @@ pub fn register(parent: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyRowDescription>()?;
     m.add_class::<PyDataRow>()?;
     m.add_class::<PyErrorResponse>()?;
+    crate::messages_ext::add_classes(&m)?;
 
     parent.add_submodule(&m)?;
     py.import("sys")?

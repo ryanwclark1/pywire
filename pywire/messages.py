@@ -12,37 +12,115 @@ class has:
   single full wire frame,
 - structural equality and a `__repr__` that includes every field.
 
-Only the foundational variants are exposed in this first messages PR;
-the extended-query, COPY, and startup-handshake messages land in later
-PRs (see BINDING_STRATEGY.md for the roadmap).
+Covered: the simple-query and result messages, the extended-query
+protocol (`Parse`, `Bind`, `Describe`, `Execute`, `Close`, `Sync`, `Flush`
+and their replies), COPY (`CopyData`, `CopyDone`, `CopyFail`,
+`CopyInResponse`, `CopyOutResponse`), startup and authentication
+(`SslRequest`, `Authentication`, `PasswordMessage`, `SASLInitialResponse`,
+`SASLResponse`, `ParameterStatus`, `BackendKeyData`, `CancelRequest`) and
+asynchronous messages (`NoticeResponse`, `NotificationResponse`).
+
+Statement and portal names are `str`, with `""` for the unnamed one.
 
 `TransactionStatus` is exported as the enum used by `ReadyForQuery`.
 `FieldDescription` is the per-column metadata carried inside
 `RowDescription`.
 """
 
+from typing import Literal, TypeAlias
+
 from pywire._pywire.messages import (
+    Authentication,
+    BackendKeyData,
+    Bind,
+    BindComplete,
+    CancelRequest,
+    Close,
+    CloseComplete,
     CommandComplete,
+    CopyData,
+    CopyDone,
+    CopyFail,
+    CopyInResponse,
+    CopyOutResponse,
     DataRow,
+    Describe,
+    EmptyQueryResponse,
     ErrorResponse,
+    Execute,
     FieldDescription,
+    Flush,
+    NoData,
+    NoticeResponse,
+    NotificationResponse,
+    ParameterDescription,
+    ParameterStatus,
+    Parse,
+    ParseComplete,
+    PasswordMessage,
+    PortalSuspended,
     Query,
     ReadyForQuery,
     RowDescription,
+    SASLInitialResponse,
+    SASLResponse,
+    SslRequest,
     Startup,
+    Sync,
     Terminate,
     TransactionStatus,
 )
 
+AuthenticationKind: TypeAlias = Literal[
+    "ok",
+    "cleartext_password",
+    "kerberos_v5",
+    "md5_password",
+    "sasl",
+    "sasl_continue",
+    "sasl_final",
+]
+"""Values of `Authentication.kind`."""
+
 __all__ = [
+    "AuthenticationKind",
+    "Authentication",
+    "BackendKeyData",
+    "Bind",
+    "BindComplete",
+    "CancelRequest",
+    "Close",
+    "CloseComplete",
     "CommandComplete",
+    "CopyData",
+    "CopyDone",
+    "CopyFail",
+    "CopyInResponse",
+    "CopyOutResponse",
     "DataRow",
+    "Describe",
+    "EmptyQueryResponse",
     "ErrorResponse",
+    "Execute",
     "FieldDescription",
+    "Flush",
+    "NoData",
+    "NoticeResponse",
+    "NotificationResponse",
+    "ParameterDescription",
+    "ParameterStatus",
+    "Parse",
+    "ParseComplete",
+    "PasswordMessage",
+    "PortalSuspended",
     "Query",
     "ReadyForQuery",
     "RowDescription",
+    "SASLInitialResponse",
+    "SASLResponse",
+    "SslRequest",
     "Startup",
+    "Sync",
     "Terminate",
     "TransactionStatus",
 ]

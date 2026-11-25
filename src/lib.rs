@@ -6,6 +6,7 @@ mod copy;
 mod errors;
 mod extended;
 mod messages;
+mod messages_ext;
 mod query;
 mod runtime;
 mod scram_verifier;

@@ -29,8 +29,9 @@ authentication, TLS (including mutual TLS via `TLSConfig.client_ca`), cancel
 requests, streaming query responses, and COPY FROM STDIN / TO STDOUT
 (`Response.copy_in` / `Response.copy_out`). The
 synchronous `pywire.sync.serve_forever` is a convenience wrapper. `pywire.errors`
-mirrors upstream error variants; `pywire.messages` exposes a foundational
-subset of frontend and backend codecs.
+mirrors upstream error variants; `pywire.messages` exposes codecs for the
+simple and extended query protocols, COPY, startup/authentication and
+asynchronous messages.
 
 An extended-query client requires an `ExtendedQueryHandler` or a session object
 that implements its methods. There is no automatic forwarding from extended
@@ -39,8 +40,9 @@ Describe and Execute receive that same Python portal object.
 
 ## Follow-up bindings
 
-- Add remaining extended-query, COPY, and startup-handshake message codecs
-  with encode/decode round-trip tests.
+- Surface server-initiated asynchronous messages (`NoticeResponse`,
+  `ParameterStatus`, `NotificationResponse`) from handlers, once pgwire's
+  handler API offers a hook for them.
 - Expand shared protocol types only when a public binding needs them; retain
   the existing flat module layout (`auth`, `query`, `copy`, `messages`).
 
