@@ -168,8 +168,8 @@ async def test_client_copy_fail_reaches_handler_and_connection_recovers() -> Non
             writer.write(_frame(b"d", b"1\ta\n") + _frame(b"f", b"oops\x00"))
             await writer.drain()
             reply = await _await_with_data(reader, timeout=1.0)
-            # pgwire's CopyFail error, then ReadyForQuery.
-            assert b"CXX000" in reply and b"terminated by the user: oops" in reply
+            # PostgreSQL's CopyFail error (57014), then ReadyForQuery.
+            assert b"C57014" in reply and b"COPY from stdin failed: oops" in reply
             assert reply.endswith(b"Z\x00\x00\x00\x05I")
             writer.write(messages.Query("SELECT 1").encode())
             await writer.drain()

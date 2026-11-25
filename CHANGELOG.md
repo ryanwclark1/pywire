@@ -25,7 +25,10 @@ Entries are maintained with each version change.
   STDIN` and delivers data to a `pywire.copy.CopyHandler`
   (`on_copy_data` / `on_copy_done` / `on_copy_fail`, mirroring pgwire's
   trait); `Response.copy_out(chunks, columns=...)` streams an async iterable
-  of `bytes` for `COPY ... TO STDOUT`. Text, CSV and binary formats.
+  of `bytes` for `COPY ... TO STDOUT`. Text, CSV and binary formats. A
+  client `CopyFail` is answered like PostgreSQL does (SQLSTATE 57014,
+  `COPY from stdin failed: ...`), which drivers such as psycopg rely on to
+  re-raise the application's own exception.
 - 29 more `pywire.messages` codecs, each with `encode` / `decode`, equality,
   hashing and Hypothesis round-trip tests: the extended-query protocol
   (`Parse`, `Bind`, `Describe`, `Execute`, `Close`, `Sync`, `Flush`,

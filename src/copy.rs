@@ -126,11 +126,13 @@ impl CopyHandler for PyCopyHandler {
             let message = Python::attach(|py| PyString::new(py, &fail.message).into_any().unbind());
             let _ = call(&handler, "on_copy_fail", vec![message]).await;
         }
-        // Same error as pgwire's default `on_copy_fail`.
+        // PostgreSQL's own answer (`query_canceled`, as in `CopyGetData`).
+        // pgwire's default uses XX000, but clients such as psycopg expect
+        // 57014 and treat it as the normal end of an aborted COPY.
         PgWireError::UserError(Box::new(ErrorInfo::new(
             "ERROR".to_owned(),
-            "XX000".to_owned(),
-            format!("COPY IN mode terminated by the user: {}", fail.message),
+            "57014".to_owned(),
+            format!("COPY from stdin failed: {}", fail.message),
         )))
     }
 }
