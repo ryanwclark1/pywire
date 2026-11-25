@@ -35,6 +35,7 @@ use pgwire::api::auth::{
     AuthSource as PgAuthSource, DefaultServerParameterProvider, LoginInfo, StartupHandler,
 };
 use pgwire::api::cancel::{CancelHandler, DefaultCancelHandler};
+use pgwire::api::copy::CopyHandler;
 use pgwire::api::query::{
     ExtendedQueryHandler as PgExtendedQueryHandler, SimpleQueryHandler as PgSimpleQueryHandler,
 };
@@ -61,6 +62,7 @@ use tokio::sync::watch;
 use tokio::task::JoinSet;
 
 use crate::auth::{PyAuthSource, PyLoginInfo};
+use crate::copy::PyCopyHandler;
 use crate::errors::py_err_to_pywire;
 use crate::extended::{PyExtendedHandler, PythonPortals};
 use crate::query::PyQueryHandler;
@@ -113,7 +115,10 @@ impl PgSimpleQueryHandler for PyServerSimpleQueryHandler {
             self.inner.do_query(query).await
         }
         .map_err(|err| Python::attach(|py| py_err_to_pywire(py, err)))?;
-        let responses: Vec<Response> = py_responses.into_iter().map(|r| r.into_pg()).collect();
+        let responses: Vec<Response> = py_responses
+            .into_iter()
+            .map(|r| r.into_pg_for(client))
+            .collect();
         if responses
             .iter()
             .any(|response| matches!(response, Response::TransactionEnd(_)))
@@ -267,6 +272,7 @@ struct PyServerHandlers {
     startup: Arc<PyStartupHandler>,
     extended_query: Arc<PyExtendedHandler>,
     cancel: Arc<DefaultCancelHandler>,
+    copy: Arc<PyCopyHandler>,
 }
 
 impl PgWireServerHandlers for PyServerHandlers {
@@ -286,7 +292,11 @@ impl PgWireServerHandlers for PyServerHandlers {
         self.cancel.clone()
     }
 
-    // COPY and custom error handling retain pgwire's defaults.
+    fn copy_handler(&self) -> Arc<impl CopyHandler> {
+        self.copy.clone()
+    }
+
+    // Custom error handling retains pgwire's default.
 }
 
 #[derive(Clone, Copy)]
@@ -364,6 +374,7 @@ impl HandlerConfig {
             }),
             extended_query: self.extended_query.clone(),
             cancel: Arc::new(DefaultCancelHandler::new(self.manager.clone())),
+            copy: Arc::new(PyCopyHandler),
         })
     }
 }

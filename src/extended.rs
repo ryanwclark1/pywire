@@ -762,7 +762,7 @@ impl PgExtendedQueryHandler for PyExtendedHandler {
                 Ok(cloned)
             })
             .map_err(py_error)?;
-            let response = response.into_pg();
+            let response = response.into_pg_for(client);
             if matches!(response, Response::TransactionEnd(_)) {
                 self.close_all_portals(client).await?;
             }

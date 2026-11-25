@@ -18,16 +18,23 @@
 //!   handler and invokes `do_query` via the runtime bridge. PR I plugs
 //!   this into pgwire's `SimpleQueryHandler` trait on the server side.
 //!
+//! - `Response.copy_in` / `Response.copy_out` — pgwire's `CopyIn` /
+//!   `CopyOut` responses. COPY FROM data is delivered to the Python
+//!   handler carried by the response (see `crate::copy`).
+//!
 //! `_test_drive_handler` is a hidden pytest helper that runs the
 //! adapter end-to-end without the connection state machine.
 
 use std::sync::Arc;
 
-use bytes::{BufMut, BytesMut};
-use futures::stream;
-use pgwire::api::results::{FieldFormat, FieldInfo as PgFieldInfo, QueryResponse, Response, Tag};
-use pgwire::api::Type;
-use pgwire::error::PgWireError;
+use bytes::{BufMut, Bytes, BytesMut};
+use futures::stream::{self, Stream};
+use pgwire::api::results::{
+    CopyResponse, FieldFormat, FieldInfo as PgFieldInfo, QueryResponse, Response, Tag,
+};
+use pgwire::api::{ClientInfo, Type};
+use pgwire::error::{PgWireError, PgWireResult};
+use pgwire::messages::copy::CopyData;
 use pgwire::messages::data::DataRow;
 use postgres_types::Kind;
 use pyo3::prelude::*;
@@ -137,6 +144,42 @@ impl Clone for StreamInner {
     }
 }
 
+/// `COPY ... FROM STDIN`: the Python handler that receives the data.
+#[derive(Debug)]
+struct CopyInInner {
+    format: i8,
+    columns: usize,
+    handler: Py<PyAny>,
+}
+
+/// `COPY ... TO STDOUT`: an async iterator of `bytes` chunks.
+#[derive(Debug)]
+struct CopyOutInner {
+    format: i8,
+    columns: usize,
+    chunks: Py<PyAny>,
+}
+
+impl Clone for CopyInInner {
+    fn clone(&self) -> Self {
+        Python::attach(|py| Self {
+            format: self.format,
+            columns: self.columns,
+            handler: self.handler.clone_ref(py),
+        })
+    }
+}
+
+impl Clone for CopyOutInner {
+    fn clone(&self) -> Self {
+        Python::attach(|py| Self {
+            format: self.format,
+            columns: self.columns,
+            chunks: self.chunks.clone_ref(py),
+        })
+    }
+}
+
 #[derive(Clone, Debug)]
 enum ResponseInner {
     Empty,
@@ -149,6 +192,8 @@ enum ResponseInner {
     Query(Box<QueryInner>),
     Stream(Box<StreamInner>),
     Error(Box<PyErrorInfo>),
+    CopyIn(Box<CopyInInner>),
+    CopyOut(Box<CopyOutInner>),
 }
 
 #[derive(Clone, Debug)]
@@ -246,16 +291,61 @@ impl PyResponse {
     fn stream(
         _cls: &Bound<'_, PyType>,
         fields: Vec<PyFieldInfo>,
-        rows: Py<PyAny>,
+        rows: &Bound<'_, PyAny>,
         command_tag: String,
-    ) -> Self {
-        Self {
+    ) -> PyResult<Self> {
+        Ok(Self {
             inner: ResponseInner::Stream(Box::new(StreamInner {
                 fields,
-                rows,
+                rows: async_iter(rows)?,
                 command_tag,
             })),
-        }
+        })
+    }
+
+    /// Start `COPY ... FROM STDIN`: pgwire sends `CopyInResponse` and passes
+    /// each `CopyData` chunk to `handler.on_copy_data`, then calls
+    /// `handler.on_copy_done()` (its row count becomes the `COPY n` tag) or
+    /// `handler.on_copy_fail(message)` if the client aborts.
+    #[classmethod]
+    #[pyo3(signature = (handler, *, columns, format = 0))]
+    fn copy_in(
+        _cls: &Bound<'_, PyType>,
+        handler: Py<PyAny>,
+        columns: usize,
+        format: i8,
+    ) -> PyResult<Self> {
+        check_copy_format(format)?;
+        Ok(Self {
+            inner: ResponseInner::CopyIn(Box::new(CopyInInner {
+                format,
+                columns,
+                handler,
+            })),
+        })
+    }
+
+    /// Answer `COPY ... TO STDOUT` with `chunks`, an async iterable of
+    /// `bytes`. Each chunk becomes one `CopyData` message and counts as one
+    /// row in the `COPY n` tag, so yield one row per chunk. For binary
+    /// format, put the PGCOPY header in the first chunk; pgwire appends the
+    /// trailer.
+    #[classmethod]
+    #[pyo3(signature = (chunks, *, columns, format = 0))]
+    fn copy_out(
+        _cls: &Bound<'_, PyType>,
+        chunks: &Bound<'_, PyAny>,
+        columns: usize,
+        format: i8,
+    ) -> PyResult<Self> {
+        check_copy_format(format)?;
+        Ok(Self {
+            inner: ResponseInner::CopyOut(Box::new(CopyOutInner {
+                format,
+                columns,
+                chunks: async_iter(chunks)?,
+            })),
+        })
     }
 
     /// An error response. Carries the same `ErrorInfo` shape used by
@@ -276,6 +366,8 @@ impl PyResponse {
             ResponseInner::Query { .. } => "query",
             ResponseInner::Stream { .. } => "stream",
             ResponseInner::Error(_) => "error",
+            ResponseInner::CopyIn(_) => "copy_in",
+            ResponseInner::CopyOut(_) => "copy_out",
         }
     }
 
@@ -302,6 +394,14 @@ impl PyResponse {
                 q.fields.len()
             ),
             ResponseInner::Error(_) => "Response.error(...)".to_owned(),
+            ResponseInner::CopyIn(c) => format!(
+                "Response.copy_in(columns={}, format={})",
+                c.columns, c.format
+            ),
+            ResponseInner::CopyOut(c) => format!(
+                "Response.copy_out(columns={}, format={})",
+                c.columns, c.format
+            ),
         }
     }
 }
@@ -366,52 +466,84 @@ impl PyResponse {
             }
             ResponseInner::Stream(q) => {
                 let pg_fields: Vec<PgFieldInfo> = q.fields.into_iter().map(Into::into).collect();
-                let row_stream = stream::unfold(Some(q.rows), |rows| async move {
-                    let rows = rows?;
-                    let future = Python::attach(|py| -> PyResult<_> {
-                        let awaitable = rows.bind(py).call_method0("__anext__")?;
-                        pyo3_tokio::into_future(awaitable)
-                    });
-                    match future {
-                        Ok(future) => match future.await {
-                            Ok(value) => {
-                                let cells = Python::attach(|py| {
-                                    value.bind(py).extract::<Vec<Option<Vec<u8>>>>()
-                                });
-                                match cells {
-                                    Ok(cells) => Some((Ok(encode_data_row(&cells)), Some(rows))),
-                                    Err(err) => Some((
-                                        Err(Python::attach(|py| py_err_to_pywire(py, err))),
-                                        None,
-                                    )),
-                                }
-                            }
-                            Err(err) => {
-                                let stopped = Python::attach(|py| {
-                                    err.is_instance_of::<pyo3::exceptions::PyStopAsyncIteration>(py)
-                                });
-                                if stopped {
-                                    None
-                                } else {
-                                    Some((
-                                        Err(Python::attach(|py| py_err_to_pywire(py, err))),
-                                        None,
-                                    ))
-                                }
-                            }
-                        },
-                        Err(err) => {
-                            Some((Err(Python::attach(|py| py_err_to_pywire(py, err))), None))
-                        }
-                    }
+                let row_stream = py_async_iter(q.rows, |value| {
+                    Ok(encode_data_row(&value.extract::<Vec<Option<Vec<u8>>>>()?))
                 });
                 let mut qr = QueryResponse::new(Arc::new(pg_fields), row_stream);
                 qr.set_command_tag(&q.command_tag);
                 Response::Query(qr)
             }
             ResponseInner::Error(info) => Response::Error(Box::new((*info).into())),
+            ResponseInner::CopyIn(c) => Response::CopyIn(CopyResponse::new(
+                c.format,
+                c.columns,
+                stream::empty::<PgWireResult<CopyData>>(),
+            )),
+            ResponseInner::CopyOut(c) => {
+                let data = py_async_iter(c.chunks, |value| {
+                    Ok(CopyData::new(Bytes::from(value.extract::<Vec<u8>>()?)))
+                });
+                Response::CopyOut(CopyResponse::new(c.format, c.columns, data))
+            }
         }
     }
+
+    /// Like [`PyResponse::into_pg`], and if this is a `copy_in` response,
+    /// make its Python handler the connection's active COPY receiver.
+    pub fn into_pg_for<C: ClientInfo>(self, client: &C) -> Response {
+        if let ResponseInner::CopyIn(c) = &self.inner {
+            crate::copy::begin_copy_in(client, Python::attach(|py| c.handler.clone_ref(py)));
+        }
+        self.into_pg()
+    }
+}
+
+/// `aiter(obj)`: accept any `AsyncIterable`, with Python's own `TypeError`
+/// for anything else.
+fn async_iter(obj: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+    let aiter = obj.py().import("builtins")?.getattr("aiter")?;
+    Ok(aiter.call1((obj,))?.unbind())
+}
+
+fn check_copy_format(format: i8) -> PyResult<()> {
+    if matches!(format, 0 | 1) {
+        Ok(())
+    } else {
+        Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "COPY format must be 0 (text) or 1 (binary), not {format}"
+        )))
+    }
+}
+
+/// Drive a Python async iterator as a pgwire stream: each `__anext__`
+/// result goes through `convert`; `StopAsyncIteration` ends the stream and
+/// any other exception becomes a pgwire error (ending it too).
+fn py_async_iter<T, F>(iterator: Py<PyAny>, convert: F) -> impl Stream<Item = PgWireResult<T>>
+where
+    T: Send + 'static,
+    F: Fn(&Bound<'_, PyAny>) -> PyResult<T> + Send + Sync + Copy + 'static,
+{
+    stream::unfold(Some(iterator), move |iterator| async move {
+        let iterator = iterator?;
+        let next = Python::attach(|py| {
+            pyo3_tokio::into_future(iterator.bind(py).call_method0("__anext__")?)
+        });
+        let value = match next {
+            Ok(future) => future.await,
+            Err(err) => Err(err),
+        };
+        let item = value.and_then(|value| Python::attach(|py| convert(value.bind(py))));
+        match item {
+            Ok(item) => Some((Ok(item), Some(iterator))),
+            Err(err) => Python::attach(|py| {
+                if err.is_instance_of::<pyo3::exceptions::PyStopAsyncIteration>(py) {
+                    None
+                } else {
+                    Some((Err(py_err_to_pywire(py, err)), None))
+                }
+            }),
+        }
+    })
 }
 
 // ---------- Rust adapter: PyQueryHandler ------------------------------
@@ -501,6 +633,8 @@ fn _test_drive_handler<'py>(
                     ResponseInner::Stream(q) => {
                         format!("tag={} fields={} stream", q.command_tag, q.fields.len())
                     }
+                    ResponseInner::CopyIn(c) => format!("copy in columns={}", c.columns),
+                    ResponseInner::CopyOut(c) => format!("copy out columns={}", c.columns),
                     ResponseInner::Error(info) => {
                         let _: Response = PyResponse {
                             inner: ResponseInner::Error(info.clone()),

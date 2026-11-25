@@ -2,6 +2,7 @@ from collections.abc import AsyncIterable, Awaitable
 from typing import Literal, final
 
 from pywire._pywire.errors import ErrorInfo
+from pywire.copy import CopyHandler
 from pywire.query import ResponseKind
 
 __all__ = [
@@ -79,5 +80,21 @@ class Response:
     @classmethod
     def error(cls, info: ErrorInfo) -> Response:
         """A statement-level `ErrorResponse`."""
+
+    @classmethod
+    def copy_in(cls, handler: CopyHandler, *, columns: int, format: int = 0) -> Response:
+        """Start `COPY ... FROM STDIN`, delivering the data to `handler`.
+
+        `columns` is the number of columns being copied and `format` is
+        `0` (text/CSV) or `1` (binary). See `pywire.copy`.
+        """
+
+    @classmethod
+    def copy_out(cls, chunks: AsyncIterable[bytes], *, columns: int, format: int = 0) -> Response:
+        """Answer `COPY ... TO STDOUT` with `chunks`, one `CopyData` per chunk.
+
+        Each chunk counts as one row in the `COPY n` tag. For binary format
+        put the PGCOPY header in the first chunk; the trailer is added.
+        """
 
 def _test_drive_handler(handler: object, query: str) -> Awaitable[list[tuple[str, str]]]: ...

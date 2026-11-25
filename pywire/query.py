@@ -38,7 +38,9 @@ from typing import Literal, TypeAlias
 
 from pywire._pywire.query import FieldInfo, Response
 
-ResponseKind: TypeAlias = Literal["empty", "execution", "query", "stream", "error"]
+ResponseKind: TypeAlias = Literal[
+    "empty", "execution", "query", "stream", "error", "copy_in", "copy_out"
+]
 """Values of `Response.kind`, one per `Response` constructor."""
 
 # ---------- Simple query ---------------------------------------------

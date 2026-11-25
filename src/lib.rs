@@ -2,6 +2,7 @@ use pgwire::messages::startup::Startup;
 use pyo3::prelude::*;
 
 mod auth;
+mod copy;
 mod errors;
 mod extended;
 mod messages;

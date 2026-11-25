@@ -26,7 +26,8 @@ native extension owns socket processing and calls Python handlers through
 `pywire.server.serve` supports TCP connections, simple queries, optional
 extended-query handlers, per-connection sessions, cleartext and SCRAM-SHA-256
 authentication, TLS (including mutual TLS via `TLSConfig.client_ca`), cancel
-requests, and streaming query responses. The
+requests, streaming query responses, and COPY FROM STDIN / TO STDOUT
+(`Response.copy_in` / `Response.copy_out`). The
 synchronous `pywire.sync.serve_forever` is a convenience wrapper. `pywire.errors`
 mirrors upstream error variants; `pywire.messages` exposes a foundational
 subset of frontend and backend codecs.
@@ -38,9 +39,6 @@ Describe and Execute receive that same Python portal object.
 
 ## Follow-up bindings
 
-- `pywire.copy.CopyHandler` currently defines the Python callback shape only.
-  Connect COPY FROM/TO messages to the server handler and add socket tests
-  before documenting COPY as supported.
 - Add remaining extended-query, COPY, and startup-handshake message codecs
   with encode/decode round-trip tests.
 - Expand shared protocol types only when a public binding needs them; retain
