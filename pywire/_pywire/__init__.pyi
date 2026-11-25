@@ -15,6 +15,7 @@ from pywire._pywire import types as types
 from pywire.auth import AuthSource, ScramVerifierSource
 from pywire.query import ExtendedQueryHandler, SimpleQueryHandler
 from pywire.server import SessionFactory
+from pywire.session import Session
 
 __all__ = [
     "supported_protocol_range",
@@ -39,7 +40,7 @@ def serve(
     *,
     auth: AuthSource | ScramVerifierSource | None = None,
     extended: ExtendedQueryHandler | None = None,
-    session_factory: SessionFactory | None = None,
+    session_factory: SessionFactory[Session] | None = None,
     auth_method: str = "cleartext",
     tls_cert: str | None = None,
     tls_key: str | None = None,

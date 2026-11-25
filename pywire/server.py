@@ -56,11 +56,17 @@ from __future__ import annotations
 import abc
 import asyncio
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Generic, Literal, TypeAlias, TypeVar
 
 from pywire._pywire import serve as _serve
 from pywire.auth import AuthSource, LoginInfo, ScramVerifierSource
 from pywire.query import ExtendedQueryHandler, SimpleQueryHandler
+from pywire.session import Session
+
+AuthMethod: TypeAlias = Literal["trust", "cleartext", "scram-sha-256", "scram-sha-256-verifier"]
+"""Values accepted by `serve(auth_method=...)`."""
+
+S_co = TypeVar("S_co", bound=Session, covariant=True)
 
 
 @dataclass(frozen=True)
@@ -81,17 +87,22 @@ class TLSConfig:
     client_ca: str | None = None
 
 
-class SessionFactory(abc.ABC):
+class SessionFactory(abc.ABC, Generic[S_co]):
     """Create one Python handler/session object per authenticated connection.
 
     The returned object takes precedence over the process-wide simple and
-    extended handlers for that connection. If it has a synchronous ``close``
-    method, pywire calls it when the connection is released.
+    extended handlers for that connection: pywire calls its `do_query` (and,
+    for prepared statements, its extended-query methods) instead. If it has
+    a synchronous ``close`` method, pywire calls it when the connection is
+    released. See `pywire.session` for the structural types.
+
+    Parameterize the factory with your session class to keep it typed:
+    ``class Factory(SessionFactory[MySession])``.
     """
 
     @abc.abstractmethod
-    async def open(self, login: LoginInfo) -> Any:
-        """Return an object implementing the configured query handler methods."""
+    async def open(self, login: LoginInfo) -> S_co:
+        """Return the session object for the connection described by `login`."""
 
 
 async def serve(
@@ -100,10 +111,8 @@ async def serve(
     *,
     auth: AuthSource | ScramVerifierSource | None = None,
     extended: ExtendedQueryHandler | None = None,
-    session_factory: SessionFactory | None = None,
-    auth_method: Literal[
-        "trust", "cleartext", "scram-sha-256", "scram-sha-256-verifier"
-    ] = "cleartext",
+    session_factory: SessionFactory[Session] | None = None,
+    auth_method: AuthMethod = "cleartext",
     tls: TLSConfig | None = None,
     scram_iterations: int = 4096,
 ) -> None:
@@ -146,4 +155,4 @@ async def serve(
         raise
 
 
-__all__ = ["SessionFactory", "TLSConfig", "serve"]
+__all__ = ["AuthMethod", "SessionFactory", "TLSConfig", "serve"]

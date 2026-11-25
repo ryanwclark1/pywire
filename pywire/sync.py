@@ -33,19 +33,43 @@ import asyncio
 import contextlib
 
 from pywire import server
-from pywire.query import SimpleQueryHandler
+from pywire.auth import AuthSource, ScramVerifierSource
+from pywire.query import ExtendedQueryHandler, SimpleQueryHandler
+from pywire.server import AuthMethod, SessionFactory, TLSConfig
+from pywire.session import Session
 
 
-def serve_forever(simple_query: SimpleQueryHandler, addr: str) -> None:
+def serve_forever(
+    simple_query: SimpleQueryHandler,
+    addr: str,
+    *,
+    auth: AuthSource | ScramVerifierSource | None = None,
+    extended: ExtendedQueryHandler | None = None,
+    session_factory: SessionFactory[Session] | None = None,
+    auth_method: AuthMethod = "cleartext",
+    tls: TLSConfig | None = None,
+    scram_iterations: int = 4096,
+) -> None:
     """Run `pywire.server.serve` to completion in a fresh asyncio loop.
 
-    Blocks until the loop is interrupted (e.g. via SIGINT in a CLI).
-    Cancellation is swallowed because the typical exit path is "Ctrl-C
-    stops the server" — surfacing `CancelledError` would just clutter
-    the caller's traceback.
+    Takes the same arguments as `pywire.server.serve`. Blocks until the
+    loop is interrupted (e.g. via SIGINT in a CLI). Cancellation is
+    swallowed because the typical exit path is "Ctrl-C stops the server";
+    surfacing `CancelledError` would just clutter the caller's traceback.
     """
     with contextlib.suppress(KeyboardInterrupt, asyncio.CancelledError):
-        asyncio.run(server.serve(simple_query, addr))
+        asyncio.run(
+            server.serve(
+                simple_query,
+                addr,
+                auth=auth,
+                extended=extended,
+                session_factory=session_factory,
+                auth_method=auth_method,
+                tls=tls,
+                scram_iterations=scram_iterations,
+            )
+        )
 
 
 __all__ = ["serve_forever"]

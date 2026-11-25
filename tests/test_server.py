@@ -23,7 +23,7 @@ import hashlib
 import ssl
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import psycopg
 import pytest
@@ -93,7 +93,7 @@ async def _running_server(  # type: ignore[no-untyped-def]
     extended: query.ExtendedQueryHandler | None = None,
     auth_method: str = "cleartext",
     tls: server.TLSConfig | None = None,
-    session_factory: server.SessionFactory | None = None,
+    session_factory: server.SessionFactory[Any] | None = None,
 ):
     """Run `server.serve` on a free port, yield the port, cancel on exit."""
     port = await _test_bind_ephemeral()
@@ -164,7 +164,7 @@ async def test_native_server_future_remains_cancellable():
         def close(self):
             closed.set()
 
-    class Factory(server.SessionFactory):
+    class Factory(server.SessionFactory[Any]):
         async def open(self, login):
             return Session()
 
@@ -198,7 +198,7 @@ async def test_session_factory_opens_and_closes_per_connection():
         def close(self) -> None:
             events.append(("close", None))
 
-    class Factory(server.SessionFactory):
+    class Factory(server.SessionFactory[Any]):
         async def open(self, login: auth.LoginInfo) -> Session:
             events.append(("open", login.user))
             return Session()
@@ -228,7 +228,7 @@ async def test_server_cancellation_closes_active_sessions():
         def close(self) -> None:
             events.append("close")
 
-    class Factory(server.SessionFactory):
+    class Factory(server.SessionFactory[Any]):
         async def open(self, login: auth.LoginInfo) -> Session:
             events.append("open")
             return Session()
@@ -248,11 +248,13 @@ async def test_server_cancellation_closes_active_sessions():
 
 @pytest.mark.parametrize("failure", ["not-awaitable", "raised"])
 async def test_session_factory_errors_reach_the_client(failure: str) -> None:
-    class Factory(server.SessionFactory):
+    class Factory(server.SessionFactory[Any]):
         async def open(self, login: auth.LoginInfo) -> object:
             raise errors.InvalidPassword("session rejected")
 
-    factory = cast(server.SessionFactory, object()) if failure == "not-awaitable" else Factory()
+    factory = (
+        cast(server.SessionFactory[Any], object()) if failure == "not-awaitable" else Factory()
+    )
 
     async with _running_server(_DummyHandler(), session_factory=factory) as port:
         reader, writer = await asyncio.open_connection("127.0.0.1", port)
@@ -1157,7 +1159,7 @@ async def test_session_closes_after_extended_resources(disconnect: str) -> None:
             closed.append("session")
             done.set()
 
-    class Factory(server.SessionFactory):
+    class Factory(server.SessionFactory[Any]):
         async def open(self, login):
             return Session()
 
@@ -1237,7 +1239,7 @@ async def test_server_cancellation_waits_for_statement_cleanup(
             closed.append("session")
             done.set()
 
-    class Factory(server.SessionFactory):
+    class Factory(server.SessionFactory[Any]):
         async def open(self, login):
             return Session()
 
@@ -1328,7 +1330,7 @@ async def test_server_cancellation_does_not_interrupt_pending_cleanup() -> None:
             closed.append("session")
             done.set()
 
-    class Factory(server.SessionFactory):
+    class Factory(server.SessionFactory[Any]):
         async def open(self, login):
             return Session()
 

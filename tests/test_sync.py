@@ -8,7 +8,7 @@ import time
 import pytest
 
 import pywire
-from pywire import query, sync
+from pywire import query, server, sync
 
 
 def test_sync_is_exposed_under_pywire():
@@ -58,3 +58,15 @@ def test_serve_forever_runs_serve_in_its_own_loop():
             time.sleep(0.05)
     else:
         raise AssertionError(f"serve_forever never bound {addr}: {last_err}")
+
+
+def test_serve_forever_forwards_every_serve_option():
+    """Options reach `serve`: invalid ones fail with serve's own errors."""
+    with pytest.raises(ValueError, match="at least 4096"):
+        sync.serve_forever(_Empty(), "127.0.0.1:1", scram_iterations=1)
+    with pytest.raises(ValueError, match="requires auth"):
+        sync.serve_forever(_Empty(), "127.0.0.1:1", auth_method="scram-sha-256")
+    with pytest.raises(OSError, match="TLS certificate"):
+        sync.serve_forever(
+            _Empty(), "127.0.0.1:1", tls=server.TLSConfig("missing.crt", "missing.key")
+        )

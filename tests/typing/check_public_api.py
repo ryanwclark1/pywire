@@ -10,7 +10,7 @@ from collections.abc import AsyncIterator
 from typing import Literal, assert_type
 
 import pywire
-from pywire import auth, errors, messages, query, server
+from pywire import auth, errors, messages, query, server, session, sync
 from pywire.types import Format, Type
 
 
@@ -66,6 +66,26 @@ def check_types() -> None:
     assert_type(Type.INT4_ARRAY.element, Type | None)
     assert_type(Type.JSONB.pg_name, str)
     query.FieldInfo("id", type_id=Type.INT8, format=Format.BINARY)
+
+
+class _Echo(query.SimpleQueryHandler):
+    async def do_query(self, query: str) -> list[query.Response]:
+        return []
+
+
+class _Factory(server.SessionFactory[_Echo]):
+    async def open(self, login: auth.LoginInfo) -> _Echo:
+        return _Echo()
+
+
+async def check_sessions() -> None:
+    factory = _Factory()
+    assert_type(await factory.open(auth.LoginInfo()), _Echo)
+    sessions: server.SessionFactory[session.Session] = factory  # covariant
+    del sessions
+    if False:  # type-checked, never run
+        sync.serve_forever(_Echo(), "127.0.0.1:5433", session_factory=factory, tls=None)
+        await server.serve(_Echo(), "127.0.0.1:5433", auth_method="scram-sha-256")
 
 
 def check_errors() -> None:
