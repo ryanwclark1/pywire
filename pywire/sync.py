@@ -8,12 +8,13 @@ utilities that don't want to manage their own event loop.
 ```python
 from pywire.sync import serve_forever
 from pywire.query import FieldInfo, Response, SimpleQueryHandler
+from pywire.types import Type
 
 
 class Hello(SimpleQueryHandler):
     async def do_query(self, query: str) -> list[Response]:
         return [Response.query(
-            fields=[FieldInfo("greeting", type_id=25)],
+            fields=[FieldInfo("greeting", type_id=Type.TEXT)],
             rows=[[b"hi"]],
         )]
 

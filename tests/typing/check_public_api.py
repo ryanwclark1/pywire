@@ -11,6 +11,7 @@ from typing import Literal, assert_type
 
 import pywire
 from pywire import auth, errors, messages, query, server
+from pywire.types import Format, Type
 
 
 async def _rows() -> AsyncIterator[list[bytes | None]]:
@@ -59,6 +60,12 @@ def check_server() -> None:
     tls = server.TLSConfig("server.crt", "server.key", client_ca="ca.crt")
     assert_type(tls.client_ca, str | None)
     assert_type(pywire.supported_protocol_range(), tuple[int, int])
+
+
+def check_types() -> None:
+    assert_type(Type.INT4_ARRAY.element, Type | None)
+    assert_type(Type.JSONB.pg_name, str)
+    query.FieldInfo("id", type_id=Type.INT8, format=Format.BINARY)
 
 
 def check_errors() -> None:

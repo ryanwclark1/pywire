@@ -7,6 +7,7 @@ how your pywire server answers `'Q'` requests:
 
 ```python
 from pywire.query import FieldInfo, Response, SimpleQueryHandler
+from pywire.types import Type
 
 
 class HelloHandler(SimpleQueryHandler):
@@ -14,7 +15,7 @@ class HelloHandler(SimpleQueryHandler):
         if query.strip().lower() == "select 1":
             return [
                 Response.query(
-                    fields=[FieldInfo("one", type_id=23)],
+                    fields=[FieldInfo("one", type_id=Type.INT4)],
                     rows=[[b"1"]],
                 ),
             ]

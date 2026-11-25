@@ -12,13 +12,14 @@ import pywire
 from pywire.auth import AuthSource, LoginInfo, Password
 from pywire.errors import InvalidPassword
 from pywire.query import FieldInfo, Response, SimpleQueryHandler
+from pywire.types import Type
 
 
 class Hello(SimpleQueryHandler):
     async def do_query(self, query: str) -> list[Response]:
         return [
             Response.query(
-                fields=[FieldInfo("greeting", type_id=25)],
+                fields=[FieldInfo("greeting", type_id=Type.TEXT)],
                 rows=[[b"hello, world"]],
             ),
         ]

@@ -11,6 +11,7 @@ from pywire._pywire import auth as auth
 from pywire._pywire import errors as errors
 from pywire._pywire import messages as messages
 from pywire._pywire import query as query
+from pywire._pywire import types as types
 from pywire.auth import AuthSource, ScramVerifierSource
 from pywire.query import ExtendedQueryHandler, SimpleQueryHandler
 from pywire.server import SessionFactory
@@ -22,6 +23,7 @@ __all__ = [
     "auth",
     "query",
     "serve",
+    "types",
     "_test_bind_ephemeral",
     "_test_async_sleep",
     "_test_await_python_coro",
