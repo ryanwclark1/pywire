@@ -1,8 +1,15 @@
-# pywire
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/ryanwclark1/pywire/main/docs/assets/logo-wordmark-dark.svg">
+    <img alt="pywire" src="https://raw.githubusercontent.com/ryanwclark1/pywire/main/docs/assets/logo-wordmark.svg" width="300">
+  </picture>
+</p>
 
-[![CI](https://github.com/ryanwclark1/pywire/actions/workflows/ci.yml/badge.svg)](https://github.com/ryanwclark1/pywire/actions/workflows/ci.yml)
-[![Docs](https://github.com/ryanwclark1/pywire/actions/workflows/docs.yml/badge.svg)](https://ryanwclark1.github.io/pywire/)
-[![codecov](https://codecov.io/gh/ryanwclark1/pywire/graph/badge.svg)](https://codecov.io/gh/ryanwclark1/pywire)
+<p align="center">
+  <a href="https://github.com/ryanwclark1/pywire/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/ryanwclark1/pywire/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://ryanwclark1.github.io/pywire/"><img alt="Docs" src="https://github.com/ryanwclark1/pywire/actions/workflows/docs.yml/badge.svg"></a>
+  <a href="https://codecov.io/gh/ryanwclark1/pywire"><img alt="codecov" src="https://codecov.io/gh/ryanwclark1/pywire/graph/badge.svg"></a>
+</p>
 
 Python bindings for the Rust [`pgwire`](https://crates.io/crates/pgwire) library.
 

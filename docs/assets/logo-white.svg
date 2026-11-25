@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="pywire">
+  <!-- pywire mark: a "p" drawn as one wire. The stem rises, the bowl loops
+       over, and the cable ends in a plug reaching back toward the stem. -->
+  <path d="M20 58 V28 A14 14 0 1 1 34 42 H34.5" fill="none" stroke="#FFFFFF" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="27.5" y="36" width="8.5" height="12" rx="2.4" fill="#5EEAD4"/>
+  <rect x="25.2" y="38.4" width="3.2" height="2.6" rx="0.9" fill="#5EEAD4"/>
+  <rect x="25.2" y="43" width="3.2" height="2.6" rx="0.9" fill="#5EEAD4"/>
+</svg>

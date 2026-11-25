@@ -5,8 +5,38 @@ build-backend = "maturin"
 [project]
 name = "pywire"
 version = "0.42.0"
-description = "Python bindings for the Rust pgwire library"
+description = "Python bindings for the Rust pgwire library: build PostgreSQL wire-protocol servers in Python"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Ryan Clark" }]
 requires-python = ">=3.11"
+keywords = ["postgresql", "postgres", "pgwire", "wire-protocol", "asyncio", "server", "proxy"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Framework :: AsyncIO",
+  "Intended Audience :: Developers",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Programming Language :: Python :: Implementation :: CPython",
+  "Programming Language :: Rust",
+  "Topic :: Database",
+  "Topic :: Database :: Database Engines/Servers",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+  "Typing :: Typed",
+]
+
+[project.urls]
+Homepage = "https://github.com/ryanwclark1/pywire"
+Documentation = "https://ryanwclark1.github.io/pywire/"
+Source = "https://github.com/ryanwclark1/pywire"
+Changelog = "https://github.com/ryanwclark1/pywire/blob/main/CHANGELOG.md"
+Issues = "https://github.com/ryanwclark1/pywire/issues"
 
 [project.optional-dependencies]
 dev = [

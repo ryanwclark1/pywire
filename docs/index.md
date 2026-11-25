@@ -1,4 +1,9 @@
-# pywire
+---
+title: pywire
+---
+
+<img class="pywire-hero pywire-hero--light" src="assets/logo-wordmark.svg" alt="pywire">
+<img class="pywire-hero pywire-hero--dark" src="assets/logo-wordmark-dark.svg" alt="pywire">
 
 [![CI](https://github.com/ryanwclark1/pywire/actions/workflows/ci.yml/badge.svg)](https://github.com/ryanwclark1/pywire/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/ryanwclark1/pywire/graph/badge.svg)](https://codecov.io/gh/ryanwclark1/pywire)
