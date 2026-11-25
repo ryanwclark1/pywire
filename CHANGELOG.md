@@ -21,6 +21,9 @@ Entries are maintained with each version change.
   first) from pgwire 0.42's TLS client info.
 - `TLSConfig.client_ca`: require and verify client certificates (mutual TLS).
 - `pywire.sync.serve_forever` accepts every option `serve` does.
+- `raise pywire.errors.UserError(ErrorInfo(...))` sends that error with its own
+  SQLSTATE and fields from any handler (query, extended query, COPY, auth),
+  instead of the generic `XX000`.
 - COPY support: `Response.copy_in(handler, columns=...)` starts `COPY ... FROM
   STDIN` and delivers data to a `pywire.copy.CopyHandler`
   (`on_copy_data` / `on_copy_done` / `on_copy_fail`, mirroring pgwire's

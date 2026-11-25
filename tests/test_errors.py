@@ -236,6 +236,14 @@ def test_non_pywire_exception_falls_back_to_api_error():
     assert _test_py_err_to_pywire_tag(RuntimeError("from outside pywire")) == "ApiError"
 
 
+def test_user_error_carrying_error_info_keeps_its_sqlstate():
+    info = errors.ErrorInfo("ERROR", "23505", "duplicate key value", detail="Key (id)=(1)")
+    assert _test_py_err_to_pywire_tag(errors.UserError(info)) == "UserError:23505"
+    # A plain message has no SQLSTATE to carry: it stays the generic XX000.
+    assert _test_py_err_to_pywire_tag(errors.UserError("no info")) == "ApiError"
+    assert _test_py_err_to_pywire_tag(errors.UserError()) == "ApiError"
+
+
 # ---- (3) ErrorInfo ------------------------------------------------------
 
 

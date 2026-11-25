@@ -1,8 +1,10 @@
 """Report errors to clients with real SQLSTATE codes.
 
-Two ways out of `do_query`:
+Three ways out of a handler:
 
-- raise a `pywire.errors.Error` subclass, which aborts the whole query string;
+- raise a `pywire.errors.Error` subclass such as `QueryCanceled`, which
+  aborts the whole query string with that class's SQLSTATE;
+- raise `UserError(ErrorInfo(...))` to abort with any SQLSTATE and fields;
 - return `Response.error(ErrorInfo(...))` for one statement, which lets the
   responses before it through.
 """
@@ -13,7 +15,7 @@ import asyncio
 import os
 
 from pywire import server
-from pywire.errors import ErrorInfo, QueryCanceled
+from pywire.errors import ErrorInfo, QueryCanceled, UserError
 from pywire.query import FieldInfo, Response, SimpleQueryHandler
 from pywire.types import Type
 
@@ -29,6 +31,16 @@ class Strict(SimpleQueryHandler):
             elif statement.upper().startswith("CANCEL"):
                 # SQLSTATE 57014, exactly as PostgreSQL reports a cancel.
                 raise QueryCanceled("cancelled by request")
+            elif statement.upper().startswith("INSERT"):
+                raise UserError(
+                    ErrorInfo(
+                        "ERROR",
+                        "23505",  # unique_violation
+                        'duplicate key value violates unique constraint "items_pkey"',
+                        detail="Key (id)=(1) already exists.",
+                        constraint="items_pkey",
+                    )
+                )
             else:
                 info = ErrorInfo(
                     "ERROR",

@@ -364,6 +364,19 @@ pub fn py_err_to_pywire(py: Python<'_>, err: PyErr) -> PgWireError {
         .map(str::to_owned)
         .unwrap_or_else(|| msg.clone());
 
+    // `raise UserError(ErrorInfo(...))` carries a complete PostgreSQL error:
+    // send it as-is, with its own SQLSTATE and fields.
+    if name == "UserError" {
+        let info = err
+            .value(py)
+            .getattr("args")
+            .and_then(|args| args.get_item(0))
+            .and_then(|first| Ok(first.extract::<PyErrorInfo>()?));
+        if let Ok(info) = info {
+            return PgWireError::UserError(Box::new(info.into()));
+        }
+    }
+
     match name.as_str() {
         // Unit variants — perfect round-trip.
         "InvalidCancelRequest" => PgWireError::InvalidCancelRequest,
@@ -507,6 +520,7 @@ fn _test_py_err_to_pywire_tag(py: Python<'_>, exc: Bound<'_, PyAny>) -> PyResult
         PgWireError::OAuthAuthenticationFailed(_) => "OAuthAuthenticationFailed",
         PgWireError::OAuthValidationError(_) => "OAuthValidationError",
         PgWireError::OauthAuthzIdError(_) => "OauthAuthzIdError",
+        PgWireError::UserError(info) => return Ok(format!("UserError:{}", info.code)),
         _ => "ApiError",
     };
     Ok(tag.to_owned())

@@ -94,6 +94,9 @@ async def test_error_handling() -> None:
                 assert error.value.diag.message_hint == "This server only understands SELECT 1."
                 with pytest.raises(psycopg.errors.QueryCanceled):
                     conn.execute("CANCEL")
+                with pytest.raises(psycopg.errors.UniqueViolation) as duplicate:
+                    conn.execute("INSERT INTO items VALUES (1)")
+                assert duplicate.value.diag.constraint_name == "items_pkey"
 
         await run(check)
 
