@@ -89,7 +89,7 @@ select = ["E", "F", "I", "UP", "B"]
 [tool.mypy]
 python_version = "3.11"
 strict = true
-files = ["pywire", "tests", "scripts"]
+files = ["pywire", "tests", "scripts", "examples"]
 exclude = "target/"
 
 [[tool.mypy.overrides]]
@@ -106,6 +106,6 @@ module = "pytest"
 ignore_missing_imports = true
 
 [tool.pyright]
-include = ["pywire", "tests/typing"]
+include = ["pywire", "tests/typing", "examples"]
 pythonVersion = "3.11"
 typeCheckingMode = "strict"
