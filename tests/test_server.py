@@ -347,6 +347,96 @@ async def test_serve_validates_tls_files(tmp_path: Path) -> None:
         )
 
 
+_CORRUPT_PEM = "-----BEGIN CERTIFICATE-----\n{body}\n-----END CERTIFICATE-----\n"
+
+
+@pytest.mark.parametrize(
+    ("cert", "key", "client_ca", "match"),
+    [
+        # A CERTIFICATE block whose base64 does not decode.
+        (_CORRUPT_PEM.format(body="!!!!"), "server.key", None, None),
+        # A well-formed certificate paired with someone else's key.
+        ("server.crt", "client.key", None, None),
+        # A client-CA file with no certificates in it.
+        ("server.crt", "server.key", "", "TLS client CA"),
+        # A client-CA block that decodes but is not a certificate.
+        ("server.crt", "server.key", _CORRUPT_PEM.format(body="AAAA"), None),
+    ],
+    ids=["corrupt-cert", "mismatched-key", "empty-ca", "corrupt-ca"],
+)
+async def test_serve_rejects_unusable_tls_material(
+    tmp_path: Path, cert: str, key: str, client_ca: str | None, match: str | None
+) -> None:
+    fixtures = Path(__file__).parent / "fixtures"
+
+    def path(value: str) -> str:
+        if (fixtures / value).is_file():
+            return str(fixtures / value)
+        written = tmp_path / f"material-{len(list(tmp_path.iterdir()))}.pem"
+        written.write_text(value)
+        return str(written)
+
+    tls = server.TLSConfig(
+        path(cert), path(key), client_ca=None if client_ca is None else path(client_ca)
+    )
+    with pytest.raises(ValueError, match=match):
+        await server.serve(_DummyHandler(), "127.0.0.1:1", tls=tls)
+
+
+async def test_describe_results_with_wrong_types_become_errors() -> None:
+    """A session whose describe_* returns ill-typed values gets an
+    ErrorResponse, not a crash, and the connection stays usable."""
+
+    class WrongParameters:
+        parameter_types = ["not an oid"]
+        fields: list[object] = []
+
+    class WrongFields:
+        parameter_types: list[int] = []
+        fields = [object()]
+
+    statement_results: list[object] = [WrongParameters(), WrongFields()]
+
+    class Extended(query.ExtendedQueryHandler):
+        async def parse_statement(self, name, q, parameter_types):
+            return query.PreparedStatement(name, q, parameter_types)
+
+        async def describe_statement(self, statement):
+            return statement_results.pop(0)
+
+        async def bind_portal(self, name, statement, parameters, parameter_formats, result_formats):
+            return query.Portal(name, statement)
+
+        async def describe_portal(self, portal):
+            return WrongFields()
+
+        async def do_query(self, portal, max_rows):
+            return query.Response.empty()
+
+    async with _running_server(_DummyHandler(), extended=Extended()) as port:
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        try:
+            writer.write(messages.Startup(parameters={"user": "tester"}).encode())
+            await writer.drain()
+            await _await_with_data(reader)
+            for describe in (b"Ss1\x00", b"Ss1\x00", b"Pp1\x00"):
+                writer.write(
+                    _frontend_message(b"P", b"s1\x00SELECT 1\x00\x00\x00")
+                    + _frontend_message(b"B", b"p1\x00s1\x00" + b"\x00" * 6)
+                    + _frontend_message(b"D", describe)
+                    + _frontend_message(b"S")
+                )
+                await writer.drain()
+                reply = await _await_with_data(reader)
+                assert b"E" in reply and reply.endswith(b"Z\x00\x00\x00\x05I")
+                writer.write(_frontend_message(b"C", b"Ss1\x00") + _frontend_message(b"S"))
+                await writer.drain()
+                await _await_with_data(reader)
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+
 async def test_serve_surfaces_bind_failure_as_os_error():
     """A second `serve` on the same port should fail at bind time."""
     port = await _test_bind_ephemeral()

@@ -407,7 +407,8 @@ fn load_tls(
         pyo3::exceptions::PyOSError::new_err(format!("read TLS certificate {cert_path:?}: {error}"))
     })?;
     let certificates = CertificateDer::pem_file_iter(cert_path)
-        .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?
+        // Opening only fails if the file vanished since the read above.
+        .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))? // LCOV_EXCL_LINE
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
     let key_pem = std::fs::read(key_path).map_err(|error| {
@@ -591,7 +592,9 @@ fn serve<'py>(
             let resources = Arc::new(PythonPortals::new(locals.clone()));
             let handlers = config
                 .build(resources.clone())
-                .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))?;
+                // Fails only if SCRAM channel binding can't hash the TLS
+                // certificate's signature algorithm (none of the fixtures).
+                .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))?; // LCOV_EXCL_LINE
             let handlers = Arc::new(handlers);
             let tls_acceptor = tls_acceptor.clone();
             let mut stop = stop_connections.subscribe();
@@ -626,10 +629,11 @@ fn _test_bind_ephemeral(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
     pyo3_tokio::future_into_py(py, async move {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
-            .map_err(|e| pyo3::exceptions::PyOSError::new_err(format!("bind failed: {e}")))?;
+            // Test helper: binding 127.0.0.1:0 does not fail in practice.
+            .map_err(|e| pyo3::exceptions::PyOSError::new_err(format!("bind failed: {e}")))?; // LCOV_EXCL_LINE
         let port = listener
             .local_addr()
-            .map_err(|e| pyo3::exceptions::PyOSError::new_err(e.to_string()))?
+            .map_err(|e| pyo3::exceptions::PyOSError::new_err(e.to_string()))? // LCOV_EXCL_LINE
             .port();
         Ok(port)
     })

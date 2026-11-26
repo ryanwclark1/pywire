@@ -207,14 +207,16 @@ impl PyExtendedHandler {
         let portals = client
             .session_extensions()
             .get::<Arc<PythonPortals>>()
-            .ok_or_else(|| PgWireError::PortalNotFound(name.to_owned()))?;
+            // pgwire only describes portals that Bind created, and Bind
+            // registers them here; these lookups are defensive.
+            .ok_or_else(|| PgWireError::PortalNotFound(name.to_owned()))?; // LCOV_EXCL_LINE
         let entries = portals.portals.lock().unwrap();
         Python::attach(|py| {
             entries
                 .get(name)
                 .and_then(|entry| entry.bound.as_ref())
                 .map(|bound| bound.portal.clone_ref(py))
-                .ok_or_else(|| PgWireError::PortalNotFound(name.to_owned()))
+                .ok_or_else(|| PgWireError::PortalNotFound(name.to_owned())) // LCOV_EXCL_LINE
         })
     }
 

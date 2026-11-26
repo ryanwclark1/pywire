@@ -362,7 +362,9 @@ pub fn py_err_to_pywire(py: Python<'_>, err: PyErr) -> PgWireError {
     let payload = msg
         .strip_prefix(&format!("{name}: "))
         .map(str::to_owned)
-        .unwrap_or_else(|| msg.clone());
+        // PyErr's Display always starts with the qualname; keep the whole
+        // message if a subclass ever formats itself differently.
+        .unwrap_or_else(|| msg.clone()); // LCOV_EXCL_LINE
 
     // `raise UserError(ErrorInfo(...))` carries a complete PostgreSQL error:
     // send it as-is, with its own SQLSTATE and fields.
