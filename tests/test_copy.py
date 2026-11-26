@@ -275,3 +275,47 @@ async def test_copy_responses_through_the_handler_adapter() -> None:
         ("copy_in", "copy in columns=2"),
         ("copy_out", "copy out columns=3"),
     ]
+
+
+async def test_copy_in_must_be_the_last_response() -> None:
+    """pgwire sends a response list back to back, so anything after a
+    `copy_in` would reach the client mid-COPY; pywire refuses it."""
+
+    class Mixed(query.SimpleQueryHandler):
+        def __init__(self) -> None:
+            self.handler = Collect()
+
+        async def do_query(self, q: str) -> list[query.Response]:
+            done = query.Response.execution("SET")
+            copy_in = query.Response.copy_in(self.handler, columns=1)
+            return {
+                "two copies": [copy_in, query.Response.copy_in(Collect(), columns=1)],
+                "copy then set": [copy_in, done],
+                "set then copy": [done, copy_in],
+                "nothing": [],
+            }[q]
+
+    handler = Mixed()
+    async with _running_server(handler) as port:
+        reader, writer = await _session(port)
+        try:
+            for sql in ("two copies", "copy then set"):
+                writer.write(messages.Query(sql).encode())
+                await writer.drain()
+                reply = await _await_with_data(reader, timeout=1.0)
+                assert b"C0A000" in reply and b"must be the last response" in reply
+                assert reply.endswith(b"Z\x00\x00\x00\x05I")
+            writer.write(messages.Query("nothing").encode())
+            await writer.drain()
+            assert await _await_with_data(reader, timeout=1.0) == b"Z\x00\x00\x00\x05I"
+            writer.write(messages.Query("set then copy").encode())
+            await writer.drain()
+            reply = await _await_with_data(reader, timeout=1.0)
+            assert reply.startswith(b"C") and b"G" in reply  # SET, then CopyInResponse
+            writer.write(_frame(b"d", b"x\n") + _frame(b"c", b""))
+            await writer.drain()
+            assert b"COPY 1" in await _await_with_data(reader, timeout=1.0)
+        finally:
+            writer.close()
+            await writer.wait_closed()
+    assert bytes(handler.handler.data) == b"x\n"

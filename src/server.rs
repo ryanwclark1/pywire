@@ -115,6 +115,7 @@ impl PgSimpleQueryHandler for PyServerSimpleQueryHandler {
             self.inner.do_query(query).await
         }
         .map_err(|err| Python::attach(|py| py_err_to_pywire(py, err)))?;
+        crate::query::check_copy_in_is_last(&py_responses)?;
         let responses: Vec<Response> = py_responses
             .into_iter()
             .map(|r| r.into_pg_for(client))

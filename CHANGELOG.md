@@ -31,7 +31,9 @@ Entries are maintained with each version change.
   of `bytes` for `COPY ... TO STDOUT`. Text, CSV and binary formats. A
   client `CopyFail` is answered like PostgreSQL does (SQLSTATE 57014,
   `COPY from stdin failed: ...`), which drivers such as psycopg rely on to
-  re-raise the application's own exception.
+  re-raise the application's own exception. A `copy_in` must be the last
+  response `do_query` returns (pgwire sends the list without pausing for
+  COPY data); otherwise the client gets SQLSTATE 0A000.
 - 29 more `pywire.messages` codecs, each with `encode` / `decode`, equality,
   hashing and Hypothesis round-trip tests: the extended-query protocol
   (`Parse`, `Bind`, `Describe`, `Execute`, `Close`, `Sync`, `Flush`,

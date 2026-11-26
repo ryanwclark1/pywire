@@ -25,6 +25,12 @@ The handler object belongs to one COPY on one connection, so per-COPY state
 lives on `self`. Raising from `on_copy_data` or `on_copy_done` aborts the COPY
 and reports the error.
 
+`copy_in` must be the **last** response in the list that `do_query`
+returns. pgwire sends every response in the list without waiting for the
+COPY data, so anything after a `copy_in` would reach the client mid-COPY.
+pywire answers such a list with SQLSTATE `0A000` instead. `[set_tag,
+copy_in]` is fine; `[copy_in, copy_in]` is not.
+
 ## COPY TO STDOUT (server → client)
 
 Return `Response.copy_out(chunks, columns=n, format=Format.TEXT)`, where

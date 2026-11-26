@@ -9,6 +9,7 @@ PostgreSQL's bulk `COPY` runs as a sub-protocol of a query. A handler's
   client sends and `handler.on_copy_done()` when it finishes; the row count
   that returns becomes the `COPY n` command tag. If the client aborts,
   `handler.on_copy_fail(message)` runs instead and the client gets an error.
+  A `copy_in` must be the last response `do_query` returns.
 - `COPY ... TO STDOUT` (server → client): return
   `Response.copy_out(chunks, columns=...)`, where `chunks` is an async
   iterable of `bytes`. Each chunk is sent as one `CopyData` message and

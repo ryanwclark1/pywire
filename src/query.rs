@@ -498,6 +498,32 @@ impl PyResponse {
     }
 }
 
+/// Reject a `do_query` result whose `copy_in` is not the final response.
+///
+/// pgwire sends every response in the list back to back, without pausing
+/// for the client's COPY data. Anything after a `copy_in`, including a
+/// second `copy_in`, would therefore be sent while the client is
+/// mid-COPY, and both COPYs would share the connection's one receiver.
+/// (`copy_out` streams to completion first, so it may appear anywhere.)
+pub fn check_copy_in_is_last(responses: &[PyResponse]) -> PgWireResult<()> {
+    let Some((_, before_last)) = responses.split_last() else {
+        return Ok(());
+    };
+    if before_last
+        .iter()
+        .any(|response| matches!(response.inner, ResponseInner::CopyIn(_)))
+    {
+        return Err(PgWireError::UserError(Box::new(
+            pgwire::error::ErrorInfo::new(
+                "ERROR".to_owned(),
+                "0A000".to_owned(),
+                "Response.copy_in must be the last response returned by do_query".to_owned(),
+            ),
+        )));
+    }
+    Ok(())
+}
+
 /// `aiter(obj)`: accept any `AsyncIterable`, with Python's own `TypeError`
 /// for anything else.
 fn async_iter(obj: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
