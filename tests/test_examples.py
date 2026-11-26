@@ -190,7 +190,7 @@ async def test_scram_examples(name: str) -> None:
         await run(check)
 
 
-async def test_tls(capsys: pytest.CaptureFixture[str]) -> None:
+async def test_tls(capsys: pytest.CaptureFixture[str], client_cert: str) -> None:
     tls = load("tls")
     cert, key = str(FIXTURES / "server.crt"), str(FIXTURES / "server.key")
 
@@ -200,8 +200,7 @@ async def test_tls(capsys: pytest.CaptureFixture[str]) -> None:
     async def mutual(addr: str) -> None:
         await tls.main(addr, cert=cert, key=key, client_ca=str(FIXTURES / "client-ca.crt"))
 
-    client = f"sslcert={FIXTURES / 'client.crt'} sslkey={FIXTURES / 'client.key'}"
-    for main, extra in [(plain, ""), (mutual, client)]:
+    for main, extra in [(plain, ""), (mutual, client_cert)]:
         async with serving(main) as dsn:
 
             def check(dsn: str = dsn, extra: str = extra) -> None:

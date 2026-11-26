@@ -34,6 +34,16 @@ leaf = x509.load_der_x509_certificate(login.client_certificates[0])
 common_name = leaf.subject.rfc4514_string()
 ```
 
+!!! tip "When a libpq client's certificate doesn't arrive"
+    Two common causes:
+
+    - libpq refuses a key file that group or others can read
+      (`chmod 0600 client.key`).
+    - libpq treats a backslash in a conninfo value as an escape, so a Windows
+      path like `C:\certs\client.crt` turns into a file that doesn't exist.
+      libpq then sends no certificate and says nothing, and the server ends
+      the handshake. Use forward slashes (`C:/certs/client.crt`).
+
 ## Security notes
 
 - pgwire 0.42 refuses plaintext bytes pipelined between `SSLRequest` and the

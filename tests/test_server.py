@@ -1576,7 +1576,7 @@ async def test_scram_tls_and_extended_fallback_with_psycopg():
         assert await asyncio.to_thread(query_over_tls) == [(1,)]
 
 
-async def test_mutual_tls_exposes_sni_and_client_certificate():
+async def test_mutual_tls_exposes_sni_and_client_certificate(client_cert: str) -> None:
     fixtures = Path(__file__).parent / "fixtures"
     tls = server.TLSConfig(
         str(fixtures / "server.crt"),
@@ -1604,8 +1604,7 @@ async def test_mutual_tls_exposes_sni_and_client_certificate():
         # Without a client certificate the TLS handshake is refused.
         with pytest.raises(psycopg.OperationalError):
             await asyncio.to_thread(connect, "")
-        certificate = f"sslcert={fixtures / 'client.crt'} sslkey={fixtures / 'client.key'}"
-        assert await asyncio.to_thread(connect, certificate) == [(1,)]
+        assert await asyncio.to_thread(connect, client_cert) == [(1,)]
 
     login = logins[-1]
     assert login.sni_server_name == "localhost"
