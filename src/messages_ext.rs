@@ -114,43 +114,63 @@ macro_rules! unit_message {
 
 unit_message!(
     /// Backend `'1'`: Parse succeeded.
-    "ParseComplete", PyParseComplete, PgParseComplete
+    "ParseComplete",
+    PyParseComplete,
+    PgParseComplete
 );
 unit_message!(
     /// Backend `'2'`: Bind succeeded.
-    "BindComplete", PyBindComplete, PgBindComplete
+    "BindComplete",
+    PyBindComplete,
+    PgBindComplete
 );
 unit_message!(
     /// Backend `'3'`: Close succeeded.
-    "CloseComplete", PyCloseComplete, PgCloseComplete
+    "CloseComplete",
+    PyCloseComplete,
+    PgCloseComplete
 );
 unit_message!(
     /// Backend `'n'`: the described statement or portal returns no rows.
-    "NoData", PyNoData, PgNoData
+    "NoData",
+    PyNoData,
+    PgNoData
 );
 unit_message!(
     /// Backend `'s'`: Execute stopped at its row limit.
-    "PortalSuspended", PyPortalSuspended, PgPortalSuspended
+    "PortalSuspended",
+    PyPortalSuspended,
+    PgPortalSuspended
 );
 unit_message!(
     /// Backend `'I'`: response to an empty query string.
-    "EmptyQueryResponse", PyEmptyQueryResponse, PgEmptyQueryResponse
+    "EmptyQueryResponse",
+    PyEmptyQueryResponse,
+    PgEmptyQueryResponse
 );
 unit_message!(
     /// Frontend `'S'`: end of an extended-query batch.
-    "Sync", PySync, PgSync
+    "Sync",
+    PySync,
+    PgSync
 );
 unit_message!(
     /// Frontend `'H'`: flush pending backend output.
-    "Flush", PyFlush, PgFlush
+    "Flush",
+    PyFlush,
+    PgFlush
 );
 unit_message!(
     /// `'c'`: end of COPY data (either direction).
-    "CopyDone", PyCopyDone, PgCopyDone
+    "CopyDone",
+    PyCopyDone,
+    PgCopyDone
 );
 unit_message!(
     /// Frontend SSL negotiation request. Like `Startup`, it has no type tag.
-    "SslRequest", PySslRequest, PgSslRequest
+    "SslRequest",
+    PySslRequest,
+    PgSslRequest
 );
 
 // ---------- extended query ---------------------------------------------
@@ -343,11 +363,15 @@ macro_rules! target_message {
 
 target_message!(
     /// Frontend `'D'`: describe a prepared statement (`"S"`) or portal (`"P"`).
-    "Describe", PyDescribe, PgDescribe
+    "Describe",
+    PyDescribe,
+    PgDescribe
 );
 target_message!(
     /// Frontend `'C'`: close a prepared statement (`"S"`) or portal (`"P"`).
-    "Close", PyClose, PgClose
+    "Close",
+    PyClose,
+    PgClose
 );
 
 /// Frontend `'E'`: run portal `name`, returning at most `max_rows` rows
@@ -553,11 +577,15 @@ macro_rules! copy_response {
 
 copy_response!(
     /// Backend `'G'`: the server is ready to receive COPY data.
-    "CopyInResponse", PyCopyInResponse, PgCopyInResponse
+    "CopyInResponse",
+    PyCopyInResponse,
+    PgCopyInResponse
 );
 copy_response!(
     /// Backend `'H'`: the server is about to send COPY data.
-    "CopyOutResponse", PyCopyOutResponse, PgCopyOutResponse
+    "CopyOutResponse",
+    PyCopyOutResponse,
+    PgCopyOutResponse
 );
 
 // ---------- startup, auth and session status ----------------------------
@@ -883,11 +911,15 @@ macro_rules! key_message {
 
 key_message!(
     /// Backend `'K'`: the process ID and secret key for cancel requests.
-    "BackendKeyData", PyBackendKeyData, PgBackendKeyData
+    "BackendKeyData",
+    PyBackendKeyData,
+    PgBackendKeyData
 );
 key_message!(
     /// Frontend cancel request (sent on a new connection, no type tag).
-    "CancelRequest", PyCancelRequest, PgCancelRequest
+    "CancelRequest",
+    PyCancelRequest,
+    PgCancelRequest
 );
 
 macro_rules! field_list_message {
@@ -932,7 +964,9 @@ macro_rules! field_list_message {
 
 field_list_message!(
     /// Backend `'N'`: a notice (warning or informational message).
-    "NoticeResponse", PyNoticeResponse, PgNoticeResponse
+    "NoticeResponse",
+    PyNoticeResponse,
+    PgNoticeResponse
 );
 
 /// Backend `'A'`: a `LISTEN`/`NOTIFY` notification.
