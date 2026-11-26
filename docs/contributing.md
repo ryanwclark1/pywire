@@ -33,12 +33,29 @@ cargo test
 # Python
 ruff check .
 ruff format --check .
-mypy
+mypy                                                   # pywire, tests, scripts, examples
+python -m mypy.stubtest pywire --allowlist stubtest-allowlist.txt
+pyright                                                # strict
 pytest -q
 
 # Combined coverage gate (also enforced in CI)
 bash scripts/coverage.sh
 ```
+
+`make lint typecheck test` runs the same steps through `uv`.
+
+### Typing rules
+
+- Type the pure-Python modules inline; there are no `.pyi` files beside them.
+- Describe every native class and function in `pywire/_pywire/*.pyi`, and
+  give `#[new]` and methods a `#[pyo3(signature = ...)]` (plus
+  `text_signature` when a default is a Rust expression) so `stubtest` can
+  compare them.
+- Every `stubtest-allowlist.txt` entry needs a comment explaining it.
+- After upgrading pgwire or `postgres-types`, regenerate `pywire/types.py`
+  with `python scripts/gen_types.py`; `tests/test_types.py` fails until you do.
+- New user-facing behavior gets a runnable example in `examples/`, which
+  `tests/test_examples.py` exercises and the user guide includes.
 
 After any change to the Rust source, rebuild the extension before re-running
 pytest:

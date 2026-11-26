@@ -19,7 +19,7 @@
 //! `scram_mock_salt` does), so an unknown user fails at the same step and
 //! with the same error as a wrong password.
 //!
-//! Adapted from pgwire 0.41.0 (`src/api/auth/sasl.rs`,
+//! Adapted from pgwire 0.42.3 (`src/api/auth/sasl.rs`,
 //! `src/api/auth/sasl/scram.rs`, `src/api/auth/mod.rs`:
 //! `register_connection`, `compute_cert_signature`, SCRAM message
 //! grammar). pgwire is Copyright (c) 2018 Ning Sun and contributors,
@@ -202,7 +202,9 @@ impl<'a> ClientFirst<'a> {
         let malformed = || invalid("malformed SCRAM client-first-message");
         let (cbind_flag, rest) = message.split_once(',').ok_or_else(malformed)?;
         let (authzid, bare) = rest.split_once(',').ok_or_else(malformed)?;
-        if !(authzid.is_empty() || authzid.starts_with("a=")) {
+        // pgwire 0.42 (like PostgreSQL) rejects any authorization identity:
+        // the authenticated user is always the startup `user`.
+        if !authzid.is_empty() {
             return Err(malformed());
         }
         let mut parts = bare.split(',');
@@ -683,15 +685,16 @@ mod tests {
 
     #[test]
     fn client_first_parsing() {
-        let first = ClientFirst::parse("p=tls-server-end-point,a=bob,n=,r=abc,x=1").unwrap();
+        let first = ClientFirst::parse("p=tls-server-end-point,,n=,r=abc,x=1").unwrap();
         assert_eq!(first.cbind_flag, "p=tls-server-end-point");
-        assert_eq!(first.gs2_header, "p=tls-server-end-point,a=bob,");
+        assert_eq!(first.gs2_header, "p=tls-server-end-point,,");
         assert_eq!(first.bare, "n=,r=abc,x=1");
         assert_eq!(first.nonce, "abc");
         for message in [
             "n",
             "n,",
             "n,b=bob,n=user,r=abc",
+            "n,a=bob,n=user,r=abc",
             "n,,m=ext,n=user,r=abc",
             "n,,n=user",
             "n,,n=user,r=",

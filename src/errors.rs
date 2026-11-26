@@ -72,6 +72,8 @@ create_exception!(
 create_exception!(pywire.errors, InvalidSecretKey, ProtocolError, "");
 create_exception!(pywire.errors, NotReadyForQuery, ProtocolError, "");
 create_exception!(pywire.errors, InvalidOptionValue, ProtocolError, "");
+create_exception!(pywire.errors, InvalidMessageLength, ProtocolError, "");
+create_exception!(pywire.errors, TruncatedMessage, ProtocolError, "");
 
 // Auth-related concrete classes.
 create_exception!(pywire.errors, FailedToCoercePasswordMessage, AuthError, "");
@@ -90,6 +92,7 @@ create_exception!(pywire.errors, InvalidOauthMessage, AuthError, "");
 create_exception!(pywire.errors, OAuthAuthenticationFailed, AuthError, "");
 create_exception!(pywire.errors, OAuthValidationError, AuthError, "");
 create_exception!(pywire.errors, OauthAuthzIdError, AuthError, "");
+create_exception!(pywire.errors, NoAuthenticationInProgress, AuthError, "");
 
 // Other concrete classes (no umbrella).
 create_exception!(pywire.errors, PortalNotFound, Error, "");
@@ -326,6 +329,9 @@ pub fn pywire_to_py_err(err: PgWireError) -> PyErr {
         PgWireError::OauthAuthzIdError(_) => OauthAuthzIdError::new_err(msg),
         PgWireError::ApiError(_) => ApiError::new_err(msg),
         PgWireError::UserError(_) => UserError::new_err(msg),
+        PgWireError::InvalidMessageLength(_) => InvalidMessageLength::new_err(msg),
+        PgWireError::TruncatedMessage(_, _) => TruncatedMessage::new_err(msg),
+        PgWireError::NoAuthenticationInProgress => NoAuthenticationInProgress::new_err(msg),
     }
 }
 
@@ -356,7 +362,22 @@ pub fn py_err_to_pywire(py: Python<'_>, err: PyErr) -> PgWireError {
     let payload = msg
         .strip_prefix(&format!("{name}: "))
         .map(str::to_owned)
-        .unwrap_or_else(|| msg.clone());
+        // PyErr's Display always starts with the qualname; keep the whole
+        // message if a subclass ever formats itself differently.
+        .unwrap_or_else(|| msg.clone()); // LCOV_EXCL_LINE
+
+    // `raise UserError(ErrorInfo(...))` carries a complete PostgreSQL error:
+    // send it as-is, with its own SQLSTATE and fields.
+    if name == "UserError" {
+        let info = err
+            .value(py)
+            .getattr("args")
+            .and_then(|args| args.get_item(0))
+            .and_then(|first| Ok(first.extract::<PyErrorInfo>()?));
+        if let Ok(info) = info {
+            return PgWireError::UserError(Box::new(info.into()));
+        }
+    }
 
     match name.as_str() {
         // Unit variants — perfect round-trip.
@@ -374,6 +395,7 @@ pub fn py_err_to_pywire(py: Python<'_>, err: PyErr) -> PgWireError {
         "NotReadyForQuery" => PgWireError::NotReadyForQuery,
         "QueryCanceled" => PgWireError::QueryCanceled,
         "PortalNotStarted" => PgWireError::PortalNotStarted,
+        "NoAuthenticationInProgress" => PgWireError::NoAuthenticationInProgress,
 
         // Single-String variants — preserve the payload.
         "UnsupportedSASLAuthMethod" => PgWireError::UnsupportedSASLAuthMethod(payload),
@@ -443,6 +465,9 @@ fn _test_raise_for(variant: &str) -> PyResult<()> {
         "OAuthValidationError" => PgWireError::OAuthValidationError("m".into()),
         "OauthAuthzIdError" => PgWireError::OauthAuthzIdError("m".into()),
         "ApiError" => PgWireError::ApiError(Box::new(io::Error::other("api"))),
+        "InvalidMessageLength" => PgWireError::InvalidMessageLength(3),
+        "TruncatedMessage" => PgWireError::TruncatedMessage(8, 4),
+        "NoAuthenticationInProgress" => PgWireError::NoAuthenticationInProgress,
         "UserError" => PgWireError::UserError(Box::new(ErrorInfo::new(
             "ERROR".into(),
             "22000".into(),
@@ -485,6 +510,7 @@ fn _test_py_err_to_pywire_tag(py: Python<'_>, exc: Bound<'_, PyAny>) -> PyResult
         PgWireError::NotReadyForQuery => "NotReadyForQuery",
         PgWireError::QueryCanceled => "QueryCanceled",
         PgWireError::PortalNotStarted => "PortalNotStarted",
+        PgWireError::NoAuthenticationInProgress => "NoAuthenticationInProgress",
         PgWireError::UnsupportedSASLAuthMethod(_) => "UnsupportedSASLAuthMethod",
         PgWireError::PortalNotFound(_) => "PortalNotFound",
         PgWireError::StatementNotFound(_) => "StatementNotFound",
@@ -496,6 +522,7 @@ fn _test_py_err_to_pywire_tag(py: Python<'_>, exc: Bound<'_, PyAny>) -> PyResult
         PgWireError::OAuthAuthenticationFailed(_) => "OAuthAuthenticationFailed",
         PgWireError::OAuthValidationError(_) => "OAuthValidationError",
         PgWireError::OauthAuthzIdError(_) => "OauthAuthzIdError",
+        PgWireError::UserError(info) => return Ok(format!("UserError:{}", info.code)),
         _ => "ApiError",
     };
     Ok(tag.to_owned())
@@ -530,6 +557,8 @@ pub fn register(parent: &Bound<'_, PyModule>) -> PyResult<()> {
     reg!(InvalidSecretKey);
     reg!(NotReadyForQuery);
     reg!(InvalidOptionValue);
+    reg!(InvalidMessageLength);
+    reg!(TruncatedMessage);
     reg!(AuthError);
     reg!(FailedToCoercePasswordMessage);
     reg!(InvalidSASLState);
@@ -542,6 +571,7 @@ pub fn register(parent: &Bound<'_, PyModule>) -> PyResult<()> {
     reg!(OAuthAuthenticationFailed);
     reg!(OAuthValidationError);
     reg!(OauthAuthzIdError);
+    reg!(NoAuthenticationInProgress);
     reg!(PortalNotFound);
     reg!(PortalNotStarted);
     reg!(StatementNotFound);

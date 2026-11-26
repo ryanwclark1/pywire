@@ -20,17 +20,18 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
+import ssl
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import psycopg
 import pytest
 
 import pywire
 from pywire import auth, errors, messages, query, server
-from pywire._pywire import _test_bind_ephemeral  # type: ignore[attr-defined]
-from pywire._pywire import serve as _native_serve  # type: ignore[attr-defined]
+from pywire._pywire import _test_bind_ephemeral
+from pywire._pywire import serve as _native_serve
 
 
 def test_server_is_exposed_under_pywire():
@@ -92,7 +93,7 @@ async def _running_server(  # type: ignore[no-untyped-def]
     extended: query.ExtendedQueryHandler | None = None,
     auth_method: str = "cleartext",
     tls: server.TLSConfig | None = None,
-    session_factory: server.SessionFactory | None = None,
+    session_factory: server.SessionFactory[Any] | None = None,
 ):
     """Run `server.serve` on a free port, yield the port, cancel on exit."""
     port = await _test_bind_ephemeral()
@@ -163,7 +164,7 @@ async def test_native_server_future_remains_cancellable():
         def close(self):
             closed.set()
 
-    class Factory(server.SessionFactory):
+    class Factory(server.SessionFactory[Any]):
         async def open(self, login):
             return Session()
 
@@ -197,7 +198,7 @@ async def test_session_factory_opens_and_closes_per_connection():
         def close(self) -> None:
             events.append(("close", None))
 
-    class Factory(server.SessionFactory):
+    class Factory(server.SessionFactory[Any]):
         async def open(self, login: auth.LoginInfo) -> Session:
             events.append(("open", login.user))
             return Session()
@@ -227,7 +228,7 @@ async def test_server_cancellation_closes_active_sessions():
         def close(self) -> None:
             events.append("close")
 
-    class Factory(server.SessionFactory):
+    class Factory(server.SessionFactory[Any]):
         async def open(self, login: auth.LoginInfo) -> Session:
             events.append("open")
             return Session()
@@ -247,11 +248,13 @@ async def test_server_cancellation_closes_active_sessions():
 
 @pytest.mark.parametrize("failure", ["not-awaitable", "raised"])
 async def test_session_factory_errors_reach_the_client(failure: str) -> None:
-    class Factory(server.SessionFactory):
+    class Factory(server.SessionFactory[Any]):
         async def open(self, login: auth.LoginInfo) -> object:
             raise errors.InvalidPassword("session rejected")
 
-    factory = cast(server.SessionFactory, object()) if failure == "not-awaitable" else Factory()
+    factory = (
+        cast(server.SessionFactory[Any], object()) if failure == "not-awaitable" else Factory()
+    )
 
     async with _running_server(_DummyHandler(), session_factory=factory) as port:
         reader, writer = await asyncio.open_connection("127.0.0.1", port)
@@ -342,6 +345,96 @@ async def test_serve_validates_tls_files(tmp_path: Path) -> None:
             "127.0.0.1:1",
             tls=server.TLSConfig(str(bad_certificate), str(bad_key)),
         )
+
+
+_CORRUPT_PEM = "-----BEGIN CERTIFICATE-----\n{body}\n-----END CERTIFICATE-----\n"
+
+
+@pytest.mark.parametrize(
+    ("cert", "key", "client_ca", "match"),
+    [
+        # A CERTIFICATE block whose base64 does not decode.
+        (_CORRUPT_PEM.format(body="!!!!"), "server.key", None, None),
+        # A well-formed certificate paired with someone else's key.
+        ("server.crt", "client.key", None, None),
+        # A client-CA file with no certificates in it.
+        ("server.crt", "server.key", "", "TLS client CA"),
+        # A client-CA block that decodes but is not a certificate.
+        ("server.crt", "server.key", _CORRUPT_PEM.format(body="AAAA"), None),
+    ],
+    ids=["corrupt-cert", "mismatched-key", "empty-ca", "corrupt-ca"],
+)
+async def test_serve_rejects_unusable_tls_material(
+    tmp_path: Path, cert: str, key: str, client_ca: str | None, match: str | None
+) -> None:
+    fixtures = Path(__file__).parent / "fixtures"
+
+    def path(value: str) -> str:
+        if (fixtures / value).is_file():
+            return str(fixtures / value)
+        written = tmp_path / f"material-{len(list(tmp_path.iterdir()))}.pem"
+        written.write_text(value)
+        return str(written)
+
+    tls = server.TLSConfig(
+        path(cert), path(key), client_ca=None if client_ca is None else path(client_ca)
+    )
+    with pytest.raises(ValueError, match=match):
+        await server.serve(_DummyHandler(), "127.0.0.1:1", tls=tls)
+
+
+async def test_describe_results_with_wrong_types_become_errors() -> None:
+    """A session whose describe_* returns ill-typed values gets an
+    ErrorResponse, not a crash, and the connection stays usable."""
+
+    class WrongParameters:
+        parameter_types = ["not an oid"]
+        fields: list[object] = []
+
+    class WrongFields:
+        parameter_types: list[int] = []
+        fields = [object()]
+
+    statement_results: list[object] = [WrongParameters(), WrongFields()]
+
+    class Extended(query.ExtendedQueryHandler):
+        async def parse_statement(self, name, q, parameter_types):
+            return query.PreparedStatement(name, q, parameter_types)
+
+        async def describe_statement(self, statement):
+            return statement_results.pop(0)
+
+        async def bind_portal(self, name, statement, parameters, parameter_formats, result_formats):
+            return query.Portal(name, statement)
+
+        async def describe_portal(self, portal):
+            return WrongFields()
+
+        async def do_query(self, portal, max_rows):
+            return query.Response.empty()
+
+    async with _running_server(_DummyHandler(), extended=Extended()) as port:
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        try:
+            writer.write(messages.Startup(parameters={"user": "tester"}).encode())
+            await writer.drain()
+            await _await_with_data(reader)
+            for describe in (b"Ss1\x00", b"Ss1\x00", b"Pp1\x00"):
+                writer.write(
+                    _frontend_message(b"P", b"s1\x00SELECT 1\x00\x00\x00")
+                    + _frontend_message(b"B", b"p1\x00s1\x00" + b"\x00" * 6)
+                    + _frontend_message(b"D", describe)
+                    + _frontend_message(b"S")
+                )
+                await writer.drain()
+                reply = await _await_with_data(reader)
+                assert b"E" in reply and reply.endswith(b"Z\x00\x00\x00\x05I")
+                writer.write(_frontend_message(b"C", b"Ss1\x00") + _frontend_message(b"S"))
+                await writer.drain()
+                await _await_with_data(reader)
+        finally:
+            writer.close()
+            await writer.wait_closed()
 
 
 async def test_serve_surfaces_bind_failure_as_os_error():
@@ -1156,7 +1249,7 @@ async def test_session_closes_after_extended_resources(disconnect: str) -> None:
             closed.append("session")
             done.set()
 
-    class Factory(server.SessionFactory):
+    class Factory(server.SessionFactory[Any]):
         async def open(self, login):
             return Session()
 
@@ -1236,7 +1329,7 @@ async def test_server_cancellation_waits_for_statement_cleanup(
             closed.append("session")
             done.set()
 
-    class Factory(server.SessionFactory):
+    class Factory(server.SessionFactory[Any]):
         async def open(self, login):
             return Session()
 
@@ -1327,7 +1420,7 @@ async def test_server_cancellation_does_not_interrupt_pending_cleanup() -> None:
             closed.append("session")
             done.set()
 
-    class Factory(server.SessionFactory):
+    class Factory(server.SessionFactory[Any]):
         async def open(self, login):
             return Session()
 
@@ -1571,6 +1664,57 @@ async def test_scram_tls_and_extended_fallback_with_psycopg():
                 return connection.execute("SELECT 1").fetchall()
 
         assert await asyncio.to_thread(query_over_tls) == [(1,)]
+
+
+async def test_mutual_tls_exposes_sni_and_client_certificate(client_cert: str) -> None:
+    fixtures = Path(__file__).parent / "fixtures"
+    tls = server.TLSConfig(
+        str(fixtures / "server.crt"),
+        str(fixtures / "server.key"),
+        client_ca=str(fixtures / "client-ca.crt"),
+    )
+    logins: list[auth.LoginInfo] = []
+
+    class Recording(auth.AuthSource):
+        async def get_password(self, login: auth.LoginInfo) -> auth.Password:
+            logins.append(login)
+            return auth.Password(b"secret")
+
+    class One(query.SimpleQueryHandler):
+        async def do_query(self, q: str) -> list[query.Response]:
+            return [query.Response.query([query.FieldInfo("one", type_id=23)], [[b"1"]])]
+
+    async with _running_server(One(), auth_source=Recording(), tls=tls) as port:
+        base = f"host=localhost hostaddr=127.0.0.1 port={port} user=alice password=secret"
+
+        def connect(extra: str) -> list[tuple[int]]:
+            with psycopg.connect(f"{base} sslmode=require {extra}") as connection:
+                return connection.execute("SELECT 1").fetchall()
+
+        # Without a client certificate the TLS handshake is refused.
+        with pytest.raises(psycopg.OperationalError):
+            await asyncio.to_thread(connect, "")
+        assert await asyncio.to_thread(connect, client_cert) == [(1,)]
+
+    login = logins[-1]
+    assert login.sni_server_name == "localhost"
+    expected = ssl.PEM_cert_to_DER_cert((fixtures / "client.crt").read_text())
+    assert login.client_certificates[0] == expected
+    assert "1 certificate(s)" in repr(login)
+
+
+async def test_serve_validates_client_ca() -> None:
+    fixtures = Path(__file__).parent / "fixtures"
+    with pytest.raises(ValueError, match="tls_client_ca requires"):
+        _native_serve(_DummyHandler(), "127.0.0.1:1", tls_client_ca="ca.crt")
+    with pytest.raises(OSError, match="TLS client CA"):
+        await server.serve(
+            _DummyHandler(),
+            "127.0.0.1:1",
+            tls=server.TLSConfig(
+                str(fixtures / "server.crt"), str(fixtures / "server.key"), client_ca="missing.crt"
+            ),
+        )
 
 
 async def test_cleartext_auth_accepts_correct_password():

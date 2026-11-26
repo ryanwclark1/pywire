@@ -2,13 +2,16 @@ use pgwire::messages::startup::Startup;
 use pyo3::prelude::*;
 
 mod auth;
+mod copy;
 mod errors;
 mod extended;
 mod messages;
+mod messages_ext;
 mod query;
 mod runtime;
 mod scram_verifier;
 mod server;
+mod types;
 
 fn protocol_range() -> (u16, u16) {
     (Startup::PG_PROTOCOL_EARLIEST, Startup::PG_PROTOCOL_LATEST)
@@ -28,6 +31,7 @@ fn _pywire(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     auth::register(m)?;
     query::register(m)?;
     server::register(m)?;
+    types::register(m)?;
     runtime::register(m)?;
     Ok(())
 }

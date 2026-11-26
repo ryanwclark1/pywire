@@ -12,13 +12,14 @@ import pywire
 from pywire.auth import AuthSource, LoginInfo, Password
 from pywire.errors import InvalidPassword
 from pywire.query import FieldInfo, Response, SimpleQueryHandler
+from pywire.types import Type
 
 
 class Hello(SimpleQueryHandler):
     async def do_query(self, query: str) -> list[Response]:
         return [
             Response.query(
-                fields=[FieldInfo("greeting", type_id=25)],
+                fields=[FieldInfo("greeting", type_id=Type.TEXT)],
                 rows=[[b"hello, world"]],
             ),
         ]
@@ -55,33 +56,53 @@ from __future__ import annotations
 import abc
 import asyncio
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Generic, Literal, TypeAlias, TypeVar
 
 from pywire._pywire import serve as _serve
 from pywire.auth import AuthSource, LoginInfo, ScramVerifierSource
 from pywire.query import ExtendedQueryHandler, SimpleQueryHandler
+from pywire.session import Session
+
+AuthMethod: TypeAlias = Literal["trust", "cleartext", "scram-sha-256", "scram-sha-256-verifier"]
+"""Values accepted by `serve(auth_method=...)`."""
+
+S_co = TypeVar("S_co", bound=Session, covariant=True)
 
 
 @dataclass(frozen=True)
 class TLSConfig:
-    """PEM certificate/key pair used for PostgreSQL TLS negotiation."""
+    """PEM certificate/key pair used for PostgreSQL TLS negotiation.
+
+    `cert` and `key` are paths to the server's PEM certificate chain and
+    private key. With `require=True` (the default) plaintext connections
+    are refused after startup. Set `client_ca` to a PEM bundle path to
+    require mutual TLS: every client must present a certificate that
+    chains to one of those CAs, and the verified chain is exposed to auth
+    and session code as `LoginInfo.client_certificates`.
+    """
 
     cert: str
     key: str
     require: bool = True
+    client_ca: str | None = None
 
 
-class SessionFactory(abc.ABC):
+class SessionFactory(abc.ABC, Generic[S_co]):
     """Create one Python handler/session object per authenticated connection.
 
     The returned object takes precedence over the process-wide simple and
-    extended handlers for that connection. If it has a synchronous ``close``
-    method, pywire calls it when the connection is released.
+    extended handlers for that connection: pywire calls its `do_query` (and,
+    for prepared statements, its extended-query methods) instead. If it has
+    a synchronous ``close`` method, pywire calls it when the connection is
+    released. See `pywire.session` for the structural types.
+
+    Parameterize the factory with your session class to keep it typed:
+    ``class Factory(SessionFactory[MySession])``.
     """
 
     @abc.abstractmethod
-    async def open(self, login: LoginInfo) -> Any:
-        """Return an object implementing the configured query handler methods."""
+    async def open(self, login: LoginInfo) -> S_co:
+        """Return the session object for the connection described by `login`."""
 
 
 async def serve(
@@ -90,10 +111,8 @@ async def serve(
     *,
     auth: AuthSource | ScramVerifierSource | None = None,
     extended: ExtendedQueryHandler | None = None,
-    session_factory: SessionFactory | None = None,
-    auth_method: Literal[
-        "trust", "cleartext", "scram-sha-256", "scram-sha-256-verifier"
-    ] = "cleartext",
+    session_factory: SessionFactory[Session] | None = None,
+    auth_method: AuthMethod = "cleartext",
     tls: TLSConfig | None = None,
     scram_iterations: int = 4096,
 ) -> None:
@@ -119,6 +138,7 @@ async def serve(
         tls_cert=tls.cert if tls else None,
         tls_key=tls.key if tls else None,
         require_tls=tls.require if tls else False,
+        tls_client_ca=tls.client_ca if tls else None,
         scram_iterations=scram_iterations,
         _shutdown=shutdown,
     )
@@ -135,4 +155,4 @@ async def serve(
         raise
 
 
-__all__ = ["SessionFactory", "TLSConfig", "serve"]
+__all__ = ["AuthMethod", "SessionFactory", "TLSConfig", "serve"]

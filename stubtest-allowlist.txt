@@ -1,0 +1,7 @@
+# stubtest allowlist: every entry needs a reason.
+
+# mypy models `Literal["a", "b"]` as a union of literal types, while the
+# runtime object is a `typing.Literal` alias; stubtest cannot compare them.
+pywire\.query\.ResponseKind
+pywire\.server\.AuthMethod
+pywire\.messages\.AuthenticationKind

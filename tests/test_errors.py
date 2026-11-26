@@ -18,13 +18,13 @@ These tests are also responsible for the 100% Rust coverage on the
 from __future__ import annotations
 
 import pytest
-from pywire._pywire.errors import (  # type: ignore[import-not-found]
-    _test_py_err_to_pywire_tag,
-    _test_raise_for,
-)
 
 import pywire
 from pywire import errors
+from pywire._pywire.errors import (
+    _test_py_err_to_pywire_tag,
+    _test_raise_for,
+)
 
 # ---- (1) class shape -----------------------------------------------------
 
@@ -57,6 +57,8 @@ PROTOCOL_ERROR_CLASSES = [
     errors.InvalidSecretKey,
     errors.NotReadyForQuery,
     errors.InvalidOptionValue,
+    errors.InvalidMessageLength,
+    errors.TruncatedMessage,
 ]
 
 AUTH_ERROR_CLASSES = [
@@ -71,6 +73,7 @@ AUTH_ERROR_CLASSES = [
     errors.OAuthAuthenticationFailed,
     errors.OAuthValidationError,
     errors.OauthAuthzIdError,
+    errors.NoAuthenticationInProgress,
 ]
 
 DIRECT_ERROR_CLASSES = [
@@ -152,6 +155,9 @@ BOUNDARY_VARIANTS = [
     ("OAuthAuthenticationFailed", errors.OAuthAuthenticationFailed),
     ("OAuthValidationError", errors.OAuthValidationError),
     ("OauthAuthzIdError", errors.OauthAuthzIdError),
+    ("InvalidMessageLength", errors.InvalidMessageLength),
+    ("TruncatedMessage", errors.TruncatedMessage),
+    ("NoAuthenticationInProgress", errors.NoAuthenticationInProgress),
     ("ApiError", errors.ApiError),
     ("UserError", errors.UserError),
 ]
@@ -201,6 +207,7 @@ PY_TO_PG_VARIANTS = [
     ("OAuthAuthenticationFailed", "OAuthAuthenticationFailed"),
     ("OAuthValidationError", "OAuthValidationError"),
     ("OauthAuthzIdError", "OauthAuthzIdError"),
+    ("NoAuthenticationInProgress", "NoAuthenticationInProgress"),
     # Variants carrying typed payloads we can't reconstruct from a
     # Python exception — fall back to ApiError but keep the message.
     ("UnsupportedProtocolVersion", "ApiError"),
@@ -227,6 +234,14 @@ def test_py_err_round_trips_to_pgwire_variant(py_class, expected_tag):
 
 def test_non_pywire_exception_falls_back_to_api_error():
     assert _test_py_err_to_pywire_tag(RuntimeError("from outside pywire")) == "ApiError"
+
+
+def test_user_error_carrying_error_info_keeps_its_sqlstate():
+    info = errors.ErrorInfo("ERROR", "23505", "duplicate key value", detail="Key (id)=(1)")
+    assert _test_py_err_to_pywire_tag(errors.UserError(info)) == "UserError:23505"
+    # A plain message has no SQLSTATE to carry: it stays the generic XX000.
+    assert _test_py_err_to_pywire_tag(errors.UserError("no info")) == "ApiError"
+    assert _test_py_err_to_pywire_tag(errors.UserError()) == "ApiError"
 
 
 # ---- (3) ErrorInfo ------------------------------------------------------

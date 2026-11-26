@@ -1,0 +1,37 @@
+/* pywire brand palette, taken from docs/assets/logo.svg. */
+[data-md-color-primary="custom"] {
+  --md-primary-fg-color: #4f46e5;
+  --md-primary-fg-color--light: #818cf8;
+  --md-primary-fg-color--dark: #3730a3;
+  --md-primary-bg-color: #ffffff;
+  --md-primary-bg-color--light: #ffffffb3;
+}
+
+[data-md-color-accent="custom"] {
+  --md-accent-fg-color: #14b8a6;
+  --md-accent-fg-color--transparent: #14b8a61a;
+  --md-accent-bg-color: #ffffff;
+  --md-accent-bg-color--light: #ffffffb3;
+}
+
+[data-md-color-scheme="slate"][data-md-color-primary="custom"] {
+  --md-primary-fg-color: #3730a3;
+  --md-typeset-a-color: #a5b4fc;
+}
+
+[data-md-color-scheme="slate"][data-md-color-accent="custom"] {
+  --md-accent-fg-color: #2dd4bf;
+  --md-accent-fg-color--transparent: #2dd4bf1a;
+}
+
+/* Home page hero: swap the wordmark with the color scheme. */
+.pywire-hero {
+  display: block;
+  margin: 0.5rem auto 1.5rem;
+  max-width: 22rem;
+}
+
+[data-md-color-scheme="slate"] .pywire-hero--light,
+[data-md-color-scheme="default"] .pywire-hero--dark {
+  display: none;
+}

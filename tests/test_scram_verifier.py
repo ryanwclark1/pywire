@@ -9,6 +9,7 @@ import hashlib
 import hmac
 import struct
 from pathlib import Path
+from typing import Any
 
 import psycopg
 import pytest
@@ -141,6 +142,8 @@ def _sasl_initial(mechanism: str, data: bytes | None) -> bytes:
         ("SCRAM-SHA-256", None, b"empty SCRAM client-first-message"),
         ("SCRAM-SHA-256-PLUS", b"p=tls-server-end-point,,n=,r=abc", b"negotiation error"),
         ("SCRAM-SHA-256", b"n,,m=ext,n=,r=abc", b"malformed SCRAM client-first-message"),
+        # pgwire 0.42 parity: any authorization identity is refused.
+        ("SCRAM-SHA-256", b"n,a=alice,n=,r=abc", b"malformed SCRAM client-first-message"),
     ],
 )
 async def test_protocol_violations_are_rejected(
@@ -219,7 +222,7 @@ async def test_verifier_session_authorization_precedes_connection_success() -> N
     """A valid SCRAM proof cannot bypass a delayed post-proof refusal."""
     opened: list[LoginInfo] = []
 
-    class Denied(server.SessionFactory):
+    class Denied(server.SessionFactory[Any]):
         async def open(self, login: LoginInfo) -> One:
             opened.append(login)
             await asyncio.sleep(0.1)
@@ -255,7 +258,7 @@ async def test_verifier_opens_one_session_before_first_query() -> None:
         async def do_query(self, q: str) -> list[query.Response]:
             return [query.Response.query([query.FieldInfo("one", type_id=23)], [[b"2"]])]
 
-    class Factory(server.SessionFactory):
+    class Factory(server.SessionFactory[Any]):
         async def open(self, login: LoginInfo) -> Session:
             await asyncio.sleep(0.1)
             opened.append(login)

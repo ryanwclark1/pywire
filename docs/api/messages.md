@@ -14,28 +14,17 @@ Python classes. Every class supports:
 - **structural equality** and a `__repr__` that includes the salient
   fields.
 
-## What's exposed today
+## What's exposed
 
-| Direction | Class             | Tag   | Notes                                                         |
-| --------- | ----------------- | ----- | ------------------------------------------------------------- |
-| Frontend  | `Startup`         | —     | No type tag (protocol-historical reasons).                    |
-| Frontend  | `Query`           | `'Q'` | Simple-query protocol.                                        |
-| Frontend  | `Terminate`       | `'X'` | Connection close. No body.                                    |
-| Backend   | `ReadyForQuery`   | `'Z'` | Carries a `TransactionStatus` indicator.                      |
-| Backend   | `CommandComplete` | `'C'` | Command-finished tag (e.g. `"SELECT 1"`, `"INSERT 0 1"`).     |
-| Backend   | `RowDescription`  | `'T'` | A list of `FieldDescription` per result column.               |
-| Backend   | `DataRow`         | `'D'` | One row's payload as opaque bytes.                            |
-| Backend   | `ErrorResponse`   | `'E'` | List of `(tag_byte, value)` field pairs.                      |
+Every message in the simple and extended query protocols, COPY,
+startup/authentication and asynchronous notices. The
+[Wire messages guide](../guides/messages.md) has the full table and the
+naming conventions (`""` for unnamed statements, `bytes` cancel keys,
+`Authentication.kind`).
 
-`TransactionStatus` is a Python enum with `Idle`, `Transaction`, and
-`Error` variants. `FieldDescription` is the per-column metadata carried
-inside `RowDescription`.
-
-The extended-query messages (`Parse`, `Bind`, `Execute`, `Sync`,
-`PortalSuspended`, …), COPY, and the rest of the startup handshake
-(`Authentication`, `ParameterStatus`, `BackendKeyData`, …) land in
-later PRs — see
-[`BINDING_STRATEGY.md`](https://github.com/ryanwclark1/pywire/blob/main/BINDING_STRATEGY.md).
+`TransactionStatus` has `Idle`, `Transaction` and `Error` members (a native
+class, not an `enum.Enum`). `FieldDescription` is the per-column metadata
+carried inside `RowDescription`.
 
 ## Quick round-trip example
 

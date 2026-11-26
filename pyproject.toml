@@ -4,9 +4,39 @@ build-backend = "maturin"
 
 [project]
 name = "pywire"
-version = "0.41.0"
-description = "Python bindings for the Rust pgwire library"
+version = "0.42.0"
+description = "Python bindings for the Rust pgwire library: build PostgreSQL wire-protocol servers in Python"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Ryan Clark" }]
 requires-python = ">=3.11"
+keywords = ["postgresql", "postgres", "pgwire", "wire-protocol", "asyncio", "server", "proxy"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Framework :: AsyncIO",
+  "Intended Audience :: Developers",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Programming Language :: Python :: Implementation :: CPython",
+  "Programming Language :: Rust",
+  "Topic :: Database",
+  "Topic :: Database :: Database Engines/Servers",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+  "Typing :: Typed",
+]
+
+[project.urls]
+Homepage = "https://github.com/ryanwclark1/pywire"
+Documentation = "https://ryanwclark1.github.io/pywire/"
+Source = "https://github.com/ryanwclark1/pywire"
+Changelog = "https://github.com/ryanwclark1/pywire/blob/main/CHANGELOG.md"
+Issues = "https://github.com/ryanwclark1/pywire/issues"
 
 [project.optional-dependencies]
 dev = [
@@ -16,6 +46,7 @@ dev = [
   "hypothesis",
   "ruff",
   "mypy",
+  "pyright",
   "maturin>=1.8,<2.0",
   "psycopg[binary]",
 ]
@@ -24,7 +55,7 @@ dev = [
 python-source = "."
 module-name = "pywire._pywire"
 features = ["pyo3/extension-module"]
-include = [{ path = "pywire/py.typed", format = "wheel" }, { path = "pywire/_pywire.pyi", format = "wheel" }]
+include = [{ path = "pywire/py.typed", format = "wheel" }, { path = "pywire/_pywire/*.pyi", format = "wheel" }]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -41,6 +72,8 @@ exclude_lines = [
   "pragma: no cover",
   "if TYPE_CHECKING:",
   "raise NotImplementedError",
+  # Protocol / overload stub bodies.
+  "^\\s*\\.\\.\\.$",
 ]
 show_missing = true
 fail_under = 100
@@ -48,7 +81,9 @@ fail_under = 100
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-extend-exclude = ["target"]
+# Docs code fences hold `--8<--` snippet includes that ruff would mangle; the
+# included code lives in examples/, which ruff, mypy and pyright all check.
+extend-exclude = ["target", "docs/**/*.md"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
@@ -56,7 +91,7 @@ select = ["E", "F", "I", "UP", "B"]
 [tool.mypy]
 python_version = "3.11"
 strict = true
-files = ["pywire", "tests", "scripts"]
+files = ["pywire", "tests", "scripts", "examples"]
 exclude = "target/"
 
 [[tool.mypy.overrides]]
@@ -71,3 +106,8 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = "pytest"
 ignore_missing_imports = true
+
+[tool.pyright]
+include = ["pywire", "tests/typing", "examples"]
+pythonVersion = "3.11"
+typeCheckingMode = "strict"

@@ -22,8 +22,8 @@
 //!   `pywire.errors.ProtocolError` on malformed input)
 //! - `__eq__` and a `__repr__` that includes every field
 //!
-//! Extended-query / COPY / startup-handshake messages land in later PRs;
-//! see `BINDING_STRATEGY.md`.
+//! Extended-query, COPY, startup/auth and notice messages live in
+//! `crate::messages_ext` and register into the same Python module.
 
 use bytes::BytesMut;
 use pgwire::messages::{
@@ -48,13 +48,16 @@ use crate::errors::pywire_to_py_err;
 
 // ---------- shared codec helpers ----------------------------------------
 
-fn encode_to_pybytes<'py, T: Message>(py: Python<'py>, msg: &T) -> PyResult<Bound<'py, PyBytes>> {
+pub(crate) fn encode_to_pybytes<'py, T: Message>(
+    py: Python<'py>,
+    msg: &T,
+) -> PyResult<Bound<'py, PyBytes>> {
     let mut buf = BytesMut::new();
     msg.encode(&mut buf).map_err(pywire_to_py_err)?;
     Ok(PyBytes::new(py, &buf))
 }
 
-fn decode_from_slice<T: Message>(data: &[u8]) -> PyResult<T> {
+pub(crate) fn decode_from_slice<T: Message>(data: &[u8]) -> PyResult<T> {
     let mut buf = BytesMut::from(data);
     let ctx = DecodeContext::default();
     match T::decode(&mut buf, &ctx).map_err(pywire_to_py_err)? {
@@ -71,11 +74,12 @@ fn decode_from_slice<T: Message>(data: &[u8]) -> PyResult<T> {
 #[pyclass(
     name = "TransactionStatus",
     module = "pywire.messages",
+    frozen,
     eq,
-    eq_int,
-    skip_from_py_object
+    hash,
+    eq_int
 )]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum PyTransactionStatus {
     /// Not currently in a transaction (`'I'`).
     Idle,
@@ -119,14 +123,8 @@ impl From<PyTransactionStatus> for PgTransactionStatus {
 
 /// Frontend startup message. No type-tag byte; encoded as
 /// `length(4) + protocol_major(2) + protocol_minor(2) + parameters + 0x00`.
-#[pyclass(
-    name = "Startup",
-    module = "pywire.messages",
-    frozen,
-    eq,
-    skip_from_py_object
-)]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[pyclass(name = "Startup", module = "pywire.messages", frozen, eq, hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct PyStartup {
     #[pyo3(get)]
     pub protocol_number_major: u16,
@@ -183,14 +181,8 @@ impl PyStartup {
 // ---------- Query -------------------------------------------------------
 
 /// Simple-query frontend message (`'Q'`).
-#[pyclass(
-    name = "Query",
-    module = "pywire.messages",
-    frozen,
-    eq,
-    skip_from_py_object
-)]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[pyclass(name = "Query", module = "pywire.messages", frozen, eq, hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct PyQuery {
     #[pyo3(get)]
     pub query: String,
@@ -222,14 +214,8 @@ impl PyQuery {
 // ---------- Terminate ---------------------------------------------------
 
 /// Frontend connection-close message (`'X'`). Carries no payload.
-#[pyclass(
-    name = "Terminate",
-    module = "pywire.messages",
-    frozen,
-    eq,
-    skip_from_py_object
-)]
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[pyclass(name = "Terminate", module = "pywire.messages", frozen, eq, hash)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct PyTerminate;
 
 #[pymethods]
@@ -258,14 +244,8 @@ impl PyTerminate {
 
 /// Backend `'Z'` message. Indicates the backend is ready for a new query
 /// cycle, with the current transaction status.
-#[pyclass(
-    name = "ReadyForQuery",
-    module = "pywire.messages",
-    frozen,
-    eq,
-    skip_from_py_object
-)]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[pyclass(name = "ReadyForQuery", module = "pywire.messages", frozen, eq, hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct PyReadyForQuery {
     #[pyo3(get)]
     pub status: PyTransactionStatus,
@@ -299,14 +279,8 @@ impl PyReadyForQuery {
 // ---------- CommandComplete --------------------------------------------
 
 /// Backend `'C'` message. Sent after a simple-query command finishes.
-#[pyclass(
-    name = "CommandComplete",
-    module = "pywire.messages",
-    frozen,
-    eq,
-    skip_from_py_object
-)]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[pyclass(name = "CommandComplete", module = "pywire.messages", frozen, eq, hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct PyCommandComplete {
     #[pyo3(get)]
     pub tag: String,
@@ -343,9 +317,10 @@ impl PyCommandComplete {
     module = "pywire.messages",
     frozen,
     eq,
+    hash,
     from_py_object
 )]
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct PyFieldDescription {
     #[pyo3(get)]
     pub name: String,
@@ -434,14 +409,8 @@ impl From<PgFieldDescription> for PyFieldDescription {
 }
 
 /// Backend `'T'` message. Describes the columns of a result set.
-#[pyclass(
-    name = "RowDescription",
-    module = "pywire.messages",
-    frozen,
-    eq,
-    skip_from_py_object
-)]
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[pyclass(name = "RowDescription", module = "pywire.messages", frozen, eq, hash)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct PyRowDescription {
     #[pyo3(get)]
     pub fields: Vec<PyFieldDescription>,
@@ -487,14 +456,8 @@ impl PyRowDescription {
 /// row. The payload format follows the format codes from the most recent
 /// `RowDescription` / `Bind` message — pywire treats it as opaque bytes
 /// at this layer.
-#[pyclass(
-    name = "DataRow",
-    module = "pywire.messages",
-    frozen,
-    eq,
-    skip_from_py_object
-)]
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[pyclass(name = "DataRow", module = "pywire.messages", frozen, eq, hash)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct PyDataRow {
     #[pyo3(get)]
     pub field_count: i16,
@@ -545,14 +508,8 @@ impl PyDataRow {
 /// Backend `'E'` message. Carries the PostgreSQL error-field set as a list
 /// of (one-byte tag, string value) pairs. For a structured view, convert
 /// the fields to a [`pywire.errors.ErrorInfo`].
-#[pyclass(
-    name = "ErrorResponse",
-    module = "pywire.messages",
-    frozen,
-    eq,
-    skip_from_py_object
-)]
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[pyclass(name = "ErrorResponse", module = "pywire.messages", frozen, eq, hash)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct PyErrorResponse {
     #[pyo3(get)]
     pub fields: Vec<(u8, String)>,
@@ -601,6 +558,7 @@ pub fn register(parent: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyRowDescription>()?;
     m.add_class::<PyDataRow>()?;
     m.add_class::<PyErrorResponse>()?;
+    crate::messages_ext::add_classes(&m)?;
 
     parent.add_submodule(&m)?;
     py.import("sys")?

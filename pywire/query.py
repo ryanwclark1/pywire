@@ -7,6 +7,7 @@ how your pywire server answers `'Q'` requests:
 
 ```python
 from pywire.query import FieldInfo, Response, SimpleQueryHandler
+from pywire.types import Type
 
 
 class HelloHandler(SimpleQueryHandler):
@@ -14,7 +15,7 @@ class HelloHandler(SimpleQueryHandler):
         if query.strip().lower() == "select 1":
             return [
                 Response.query(
-                    fields=[FieldInfo("one", type_id=23)],
+                    fields=[FieldInfo("one", type_id=Type.INT4)],
                     rows=[[b"1"]],
                 ),
             ]
@@ -33,8 +34,14 @@ from __future__ import annotations
 
 import abc
 from dataclasses import dataclass, field
+from typing import Literal, TypeAlias
 
 from pywire._pywire.query import FieldInfo, Response
+
+ResponseKind: TypeAlias = Literal[
+    "empty", "execution", "query", "stream", "error", "copy_in", "copy_out"
+]
+"""Values of `Response.kind`, one per `Response` constructor."""
 
 # ---------- Simple query ---------------------------------------------
 
@@ -68,7 +75,7 @@ class PreparedStatement:
 
     name: str
     query: str
-    parameter_types: list[int] = field(default_factory=list)
+    parameter_types: list[int] = field(default_factory=list[int])
 
 
 @dataclass(frozen=True)
@@ -84,9 +91,9 @@ class Portal:
 
     name: str
     statement: PreparedStatement
-    parameters: list[bytes | None] = field(default_factory=list)
-    parameter_formats: list[int] = field(default_factory=list)
-    result_formats: list[int] = field(default_factory=list)
+    parameters: list[bytes | None] = field(default_factory=list[bytes | None])
+    parameter_formats: list[int] = field(default_factory=list[int])
+    result_formats: list[int] = field(default_factory=list[int])
 
 
 @dataclass(frozen=True)
@@ -163,5 +170,6 @@ __all__ = [
     "Portal",
     "PreparedStatement",
     "Response",
+    "ResponseKind",
     "SimpleQueryHandler",
 ]

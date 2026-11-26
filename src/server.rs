@@ -35,6 +35,7 @@ use pgwire::api::auth::{
     AuthSource as PgAuthSource, DefaultServerParameterProvider, LoginInfo, StartupHandler,
 };
 use pgwire::api::cancel::{CancelHandler, DefaultCancelHandler};
+use pgwire::api::copy::CopyHandler;
 use pgwire::api::query::{
     ExtendedQueryHandler as PgExtendedQueryHandler, SimpleQueryHandler as PgSimpleQueryHandler,
 };
@@ -49,7 +50,9 @@ use pgwire::messages::response::TransactionStatus;
 use pgwire::messages::simplequery::Query;
 use pgwire::messages::{PgWireBackendMessage, PgWireFrontendMessage};
 use pgwire::tokio::process_socket;
-use pgwire::tokio::tokio_rustls::rustls::ServerConfig;
+use pgwire::tokio::tokio_rustls::rustls::server::danger::ClientCertVerifier;
+use pgwire::tokio::tokio_rustls::rustls::server::WebPkiClientVerifier;
+use pgwire::tokio::tokio_rustls::rustls::{RootCertStore, ServerConfig};
 use pgwire::tokio::TlsAcceptor;
 use pyo3::prelude::*;
 use pyo3_async_runtimes::tokio as pyo3_tokio;
@@ -59,6 +62,7 @@ use tokio::sync::watch;
 use tokio::task::JoinSet;
 
 use crate::auth::{PyAuthSource, PyLoginInfo};
+use crate::copy::PyCopyHandler;
 use crate::errors::py_err_to_pywire;
 use crate::extended::{PyExtendedHandler, PythonPortals};
 use crate::query::PyQueryHandler;
@@ -111,7 +115,11 @@ impl PgSimpleQueryHandler for PyServerSimpleQueryHandler {
             self.inner.do_query(query).await
         }
         .map_err(|err| Python::attach(|py| py_err_to_pywire(py, err)))?;
-        let responses: Vec<Response> = py_responses.into_iter().map(|r| r.into_pg()).collect();
+        crate::query::check_copy_in_is_last(&py_responses)?;
+        let responses: Vec<Response> = py_responses
+            .into_iter()
+            .map(|r| r.into_pg_for(client))
+            .collect();
         if responses
             .iter()
             .any(|response| matches!(response, Response::TransactionEnd(_)))
@@ -265,6 +273,7 @@ struct PyServerHandlers {
     startup: Arc<PyStartupHandler>,
     extended_query: Arc<PyExtendedHandler>,
     cancel: Arc<DefaultCancelHandler>,
+    copy: Arc<PyCopyHandler>,
 }
 
 impl PgWireServerHandlers for PyServerHandlers {
@@ -284,7 +293,11 @@ impl PgWireServerHandlers for PyServerHandlers {
         self.cancel.clone()
     }
 
-    // COPY and custom error handling retain pgwire's defaults.
+    fn copy_handler(&self) -> Arc<impl CopyHandler> {
+        self.copy.clone()
+    }
+
+    // Custom error handling retains pgwire's default.
 }
 
 #[derive(Clone, Copy)]
@@ -362,16 +375,40 @@ impl HandlerConfig {
             }),
             extended_query: self.extended_query.clone(),
             cancel: Arc::new(DefaultCancelHandler::new(self.manager.clone())),
+            copy: Arc::new(PyCopyHandler),
         })
     }
 }
 
-fn load_tls(cert_path: &str, key_path: &str) -> PyResult<(TlsAcceptor, Arc<Vec<u8>>)> {
+/// Build a rustls verifier that requires a client certificate chaining to
+/// one of the PEM certificates in `ca_path` (mutual TLS).
+fn load_client_verifier(ca_path: &str) -> PyResult<Arc<dyn ClientCertVerifier>> {
+    let value_error = |error: String| pyo3::exceptions::PyValueError::new_err(error);
+    let mut roots = RootCertStore::empty();
+    for certificate in CertificateDer::pem_file_iter(ca_path).map_err(|error| {
+        pyo3::exceptions::PyOSError::new_err(format!("read TLS client CA {ca_path:?}: {error}"))
+    })? {
+        let certificate = certificate.map_err(|error| value_error(error.to_string()))?;
+        roots
+            .add(certificate)
+            .map_err(|error| value_error(error.to_string()))?;
+    }
+    WebPkiClientVerifier::builder(Arc::new(roots))
+        .build()
+        .map_err(|error| value_error(format!("TLS client CA {ca_path:?}: {error}")))
+}
+
+fn load_tls(
+    cert_path: &str,
+    key_path: &str,
+    client_ca_path: Option<&str>,
+) -> PyResult<(TlsAcceptor, Arc<Vec<u8>>)> {
     let certificate_pem = std::fs::read(cert_path).map_err(|error| {
         pyo3::exceptions::PyOSError::new_err(format!("read TLS certificate {cert_path:?}: {error}"))
     })?;
     let certificates = CertificateDer::pem_file_iter(cert_path)
-        .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?
+        // Opening only fails if the file vanished since the read above.
+        .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))? // LCOV_EXCL_LINE
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
     let key_pem = std::fs::read(key_path).map_err(|error| {
@@ -379,8 +416,12 @@ fn load_tls(cert_path: &str, key_path: &str) -> PyResult<(TlsAcceptor, Arc<Vec<u
     })?;
     let key = PrivateKeyDer::from_pem_slice(&key_pem)
         .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
-    let mut config = ServerConfig::builder()
-        .with_no_client_auth()
+    let builder = ServerConfig::builder();
+    let builder = match client_ca_path {
+        Some(path) => builder.with_client_cert_verifier(load_client_verifier(path)?),
+        None => builder.with_no_client_auth(),
+    };
+    let mut config = builder
         .with_single_cert(certificates, key)
         .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
     config.alpn_protocols = vec![b"postgresql".to_vec()];
@@ -405,7 +446,7 @@ fn load_tls(cert_path: &str, key_path: &str) -> PyResult<(TlsAcceptor, Arc<Vec<u
 /// cancel via `asyncio.Task.cancel` to stop.
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
-#[pyo3(signature = (simple_query, addr, *, auth = None, extended = None, session_factory = None, auth_method = "cleartext", tls_cert = None, tls_key = None, require_tls = false, scram_iterations = 4096, _shutdown = None))]
+#[pyo3(signature = (simple_query, addr, *, auth = None, extended = None, session_factory = None, auth_method = "cleartext", tls_cert = None, tls_key = None, require_tls = false, tls_client_ca = None, scram_iterations = 4096, _shutdown = None))]
 fn serve<'py>(
     py: Python<'py>,
     simple_query: Bound<'py, PyAny>,
@@ -417,6 +458,7 @@ fn serve<'py>(
     tls_cert: Option<String>,
     tls_key: Option<String>,
     require_tls: bool,
+    tls_client_ca: Option<String>,
     scram_iterations: usize,
     _shutdown: Option<Py<PyAny>>,
 ) -> PyResult<Bound<'py, PyAny>> {
@@ -453,8 +495,13 @@ fn serve<'py>(
     }
     let (tls_acceptor, tls_certificate_pem) = match (tls_cert, tls_key) {
         (Some(cert), Some(key)) => {
-            let (acceptor, pem) = load_tls(&cert, &key)?;
+            let (acceptor, pem) = load_tls(&cert, &key, tls_client_ca.as_deref())?;
             (Some(acceptor), Some(pem))
+        }
+        (None, None) if tls_client_ca.is_some() => {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "tls_client_ca requires tls_cert and tls_key",
+            ));
         }
         (None, None) if !require_tls => (None, None),
         (None, None) => {
@@ -545,7 +592,9 @@ fn serve<'py>(
             let resources = Arc::new(PythonPortals::new(locals.clone()));
             let handlers = config
                 .build(resources.clone())
-                .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))?;
+                // Fails only if SCRAM channel binding can't hash the TLS
+                // certificate's signature algorithm (none of the fixtures).
+                .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))?; // LCOV_EXCL_LINE
             let handlers = Arc::new(handlers);
             let tls_acceptor = tls_acceptor.clone();
             let mut stop = stop_connections.subscribe();
@@ -580,10 +629,11 @@ fn _test_bind_ephemeral(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
     pyo3_tokio::future_into_py(py, async move {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
-            .map_err(|e| pyo3::exceptions::PyOSError::new_err(format!("bind failed: {e}")))?;
+            // Test helper: binding 127.0.0.1:0 does not fail in practice.
+            .map_err(|e| pyo3::exceptions::PyOSError::new_err(format!("bind failed: {e}")))?; // LCOV_EXCL_LINE
         let port = listener
             .local_addr()
-            .map_err(|e| pyo3::exceptions::PyOSError::new_err(e.to_string()))?
+            .map_err(|e| pyo3::exceptions::PyOSError::new_err(e.to_string()))? // LCOV_EXCL_LINE
             .port();
         Ok(port)
     })

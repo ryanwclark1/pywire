@@ -16,10 +16,10 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 
 import pytest
-from pywire._pywire.query import _test_drive_handler  # type: ignore[import-not-found]
 
 import pywire
 from pywire import errors, query
+from pywire._pywire.query import _test_drive_handler
 
 # ---- module shape -----------------------------------------------------
 

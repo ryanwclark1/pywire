@@ -47,6 +47,14 @@ jobs:
       - name: mypy
         run: mypy
 
+      # The editable install above builds the extension, so stubtest can
+      # compare the stubs in pywire/_pywire/ with the real native module.
+      - name: stubtest
+        run: python -m mypy.stubtest pywire --allowlist stubtest-allowlist.txt
+
+      - name: pyright (strict)
+        run: pyright
+
       - name: actionlint
         run: |
           bash <(curl -sSf https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)

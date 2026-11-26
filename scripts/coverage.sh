@@ -76,7 +76,20 @@ python3 -m pytest -q
 
 # Discover binaries to report against.
 SO_PATH="$(find pywire -name '_pywire*.so' -type f | head -1)"
-TEST_BIN="$(find target/debug/deps -name 'pywire-*' -type f -executable ! -name '*.d' ! -name '*.so' | head -1)"
+# Ask cargo where the unit-test binary is rather than guessing a path:
+# newer cargo versions no longer put it under target/debug/deps.
+# The filter reads all of cargo's output (no early exit), so cargo never
+# writes into a closed pipe under `set -o pipefail`.
+TEST_BIN="$(cargo test --quiet --no-run --message-format=json | python3 -c '
+import json, sys
+found = []
+for line in sys.stdin:
+    msg = json.loads(line)
+    if msg.get("reason") == "compiler-artifact" and msg.get("profile", {}).get("test") \
+            and msg["target"]["name"] == "pywire" and msg.get("executable"):
+        found.append(msg["executable"])
+print(found[0] if found else "")
+')"
 if [[ -z "$SO_PATH" || -z "$TEST_BIN" ]]; then
   echo "ERROR: could not locate .so ($SO_PATH) or test binary ($TEST_BIN)" >&2
   exit 1

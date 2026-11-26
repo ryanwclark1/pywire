@@ -14,8 +14,10 @@ native extension owns socket processing and calls Python handlers through
 - Hold connection-specific Python state per connection. Parsed statements and
   bound portals survive the matching extended-query phases; Close, Sync, and
   disconnect release the corresponding state.
-- Keep public `.pyi` files aligned with runtime behavior and verify them with
-  strict type checking.
+- Type the pure-Python modules inline and describe the native extension only
+  in the `pywire/_pywire/` stub package. CI checks both with mypy and pyright
+  in strict mode and compares the stubs with the built module using
+  `mypy.stubtest`; `stubtest-allowlist.txt` entries must explain themselves.
 - Match the upstream pgwire major/minor version. Binding-only fixes increment
   pywire's patch version; consumers pin a tested Git commit.
 
@@ -23,10 +25,13 @@ native extension owns socket processing and calls Python handlers through
 
 `pywire.server.serve` supports TCP connections, simple queries, optional
 extended-query handlers, per-connection sessions, cleartext and SCRAM-SHA-256
-authentication, TLS, cancel requests, and streaming query responses. The
+authentication, TLS (including mutual TLS via `TLSConfig.client_ca`), cancel
+requests, streaming query responses, and COPY FROM STDIN / TO STDOUT
+(`Response.copy_in` / `Response.copy_out`). The
 synchronous `pywire.sync.serve_forever` is a convenience wrapper. `pywire.errors`
-mirrors upstream error variants; `pywire.messages` exposes a foundational
-subset of frontend and backend codecs.
+mirrors upstream error variants; `pywire.messages` exposes codecs for the
+simple and extended query protocols, COPY, startup/authentication and
+asynchronous messages.
 
 An extended-query client requires an `ExtendedQueryHandler` or a session object
 that implements its methods. There is no automatic forwarding from extended
@@ -35,11 +40,9 @@ Describe and Execute receive that same Python portal object.
 
 ## Follow-up bindings
 
-- `pywire.copy.CopyHandler` currently defines the Python callback shape only.
-  Connect COPY FROM/TO messages to the server handler and add socket tests
-  before documenting COPY as supported.
-- Add remaining extended-query, COPY, and startup-handshake message codecs
-  with encode/decode round-trip tests.
+- Surface server-initiated asynchronous messages (`NoticeResponse`,
+  `ParameterStatus`, `NotificationResponse`) from handlers, once pgwire's
+  handler API offers a hook for them.
 - Expand shared protocol types only when a public binding needs them; retain
   the existing flat module layout (`auth`, `query`, `copy`, `messages`).
 

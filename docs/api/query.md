@@ -34,6 +34,8 @@ response stream. Construct via the classmethod factories:
 | `Response.query(fields, rows, *, command_tag="SELECT")`              | Rows-returning result (SELECT, RETURNING, …).                     |
 | `Response.stream(fields, rows, *, command_tag="SELECT")`             | Async row stream with wire-level backpressure.                    |
 | `Response.error(info)`                                               | A statement-level error with structured fields.                   |
+| `Response.copy_in(handler, *, columns, format=0)`                    | Start `COPY ... FROM STDIN`; data goes to a `CopyHandler` ([COPY](../guides/copy.md)). |
+| `Response.copy_out(chunks, *, columns, format=0)`                    | Answer `COPY ... TO STDOUT` from an async iterable of `bytes`.    |
 
 For transaction commands, pass `transaction="start"` for `BEGIN` or
 `START TRANSACTION`, and `transaction="end"` for a full `COMMIT` or
@@ -42,7 +44,8 @@ the `ROLLBACK` command tag but keeps the transaction open. The same
 flag works for each response in a multi-statement simple query.
 
 The `kind` property returns one of `"empty"`, `"execution"`, `"query"`,
-`"stream"`, `"error"` and a `repr()` that names the constructor.
+`"stream"`, `"error"`, `"copy_in"` or `"copy_out"` (typed as
+`pywire.query.ResponseKind`), and `repr()` names the constructor.
 
 ### Row payload format
 
@@ -53,8 +56,9 @@ list of cell payloads, one per column in `fields`. A cell is:
   `FieldInfo.format`, or
 - `None` — SQL NULL.
 
-The encoder writes the wire-level `DataRow` frame for you. Use format `0`
-for text and `1` for binary. `Response.stream` accepts an async iterable and
+The encoder writes the wire-level `DataRow` frame for you. Use
+`Format.TEXT` (`0`) or `Format.BINARY` (`1`) from `pywire.types`; see
+[Types and formats](../guides/types-and-formats.md). `Response.stream` accepts an async iterable and
 pulls one row at a time as the socket becomes writable.
 
 ## `FieldInfo`

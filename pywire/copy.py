@@ -1,85 +1,72 @@
-"""COPY-protocol handler bindings for pywire.
+"""COPY-protocol bindings for pywire.
 
-PostgreSQL's bulk `COPY` protocol is a separate sub-protocol on top of
-the connection: after a `COPY ... FROM STDIN` (or `TO STDOUT`) is
-issued, the wire enters streaming mode where the frontend sends
-`CopyData` / `CopyDone` / `CopyFail` messages until the operation
-completes.
+PostgreSQL's bulk `COPY` runs as a sub-protocol of a query. A handler's
+`do_query` starts one by returning a COPY response:
 
-`CopyHandler` defines the planned Python callback shape. The server does
-not currently wire these callbacks into PostgreSQL COPY messages.
+- `COPY ... FROM STDIN` (client → server): return
+  `Response.copy_in(handler, columns=...)`. pywire sends `CopyInResponse`,
+  then calls `handler.on_copy_data(chunk)` for each `CopyData` message the
+  client sends and `handler.on_copy_done()` when it finishes; the row count
+  that returns becomes the `COPY n` command tag. If the client aborts,
+  `handler.on_copy_fail(message)` runs instead and the client gets an error.
+  A `copy_in` must be the last response `do_query` returns.
+- `COPY ... TO STDOUT` (server → client): return
+  `Response.copy_out(chunks, columns=...)`, where `chunks` is an async
+  iterable of `bytes`. Each chunk is sent as one `CopyData` message and
+  counts as one row, so yield one row per chunk.
+
+The `CopyHandler` passed to `copy_in` belongs to that one COPY, so keep its
+state on `self`:
+
+```python
+from pywire.copy import CopyHandler
+from pywire.query import Response, SimpleQueryHandler
+
+
+class Collect(CopyHandler):
+    def __init__(self) -> None:
+        self.data = bytearray()
+
+    async def on_copy_data(self, chunk: bytes) -> None:
+        self.data += chunk
+
+    async def on_copy_done(self) -> int:
+        return self.data.count(b"\\n")
+
+
+class Handler(SimpleQueryHandler):
+    async def do_query(self, query: str) -> list[Response]:
+        return [Response.copy_in(Collect(), columns=2)]
+```
+
+Chunks are opaque: pywire does not parse text, CSV or binary COPY data. A
+chunk boundary need not fall on a row boundary for `COPY FROM`.
 """
 
 from __future__ import annotations
 
 import abc
-from dataclasses import dataclass, field
-
-
-@dataclass(frozen=True)
-class CopyInfo:
-    """Metadata about an in-flight COPY operation.
-
-    `direction` is `"in"` for `COPY FROM STDIN` (client → server) and
-    `"out"` for `COPY TO STDOUT` (server → client). `binary` is True
-    when the COPY uses binary format; False for text/CSV.
-    `column_formats` is one format code per column (`0` text, `1`
-    binary); the list is empty for `COPY ... TO STDOUT` of a whole
-    relation in text format.
-    """
-
-    direction: str
-    binary: bool
-    column_formats: list[int] = field(default_factory=list)
 
 
 class CopyHandler(abc.ABC):
-    """Async ABC for `COPY ... FROM STDIN` and `COPY ... TO STDOUT`.
+    """Receives the data of one `COPY ... FROM STDIN`.
 
-    For `COPY FROM STDIN` (client → server) the server calls:
-
-      1. `start_copy_in(query) -> CopyInfo`
-      2. `on_copy_data(chunk)` for each `CopyData` message the client
-         sends. The chunk is opaque `bytes` per the COPY format the
-         start_copy_in response negotiated.
-      3. `on_copy_done()` when the client signals end-of-data.
-         Returning a `command_tag` string (e.g. `"COPY 100"`) ends the
-         operation.
-
-    For `COPY TO STDOUT` (server → client) the server calls:
-
-      1. `start_copy_out(query) -> CopyInfo` — also produce the first
-         chunk if you can.
-      2. `next_copy_out_chunk()` repeatedly. Return `b""` (empty
-         bytes) to signal end-of-data and finalize with a
-         `command_tag`.
-
-    `on_copy_fail(message)` is called if the client aborts. Default:
-    no-op; you may override to clean up partial state.
+    Mirrors pgwire's `CopyHandler` trait: `on_copy_data`, `on_copy_done`
+    and `on_copy_fail`. Raising from `on_copy_data` or `on_copy_done`
+    aborts the COPY and reports the error to the client (raise a
+    `pywire.errors.Error` subclass to choose the SQLSTATE).
     """
 
     @abc.abstractmethod
-    async def start_copy_in(self, query: str) -> CopyInfo:
-        """Begin a `COPY FROM STDIN` operation."""
-
-    @abc.abstractmethod
     async def on_copy_data(self, chunk: bytes) -> None:
-        """Process one `CopyData` chunk from the client."""
+        """Process one `CopyData` payload from the client."""
 
     @abc.abstractmethod
-    async def on_copy_done(self) -> str:
-        """End of client-side data; return the wire command tag."""
-
-    @abc.abstractmethod
-    async def start_copy_out(self, query: str) -> CopyInfo:
-        """Begin a `COPY TO STDOUT` operation."""
-
-    @abc.abstractmethod
-    async def next_copy_out_chunk(self) -> bytes:
-        """Return the next chunk of `COPY TO STDOUT` data; `b""` ends."""
+    async def on_copy_done(self) -> int:
+        """The client sent `CopyDone`; return the number of rows copied."""
 
     async def on_copy_fail(self, message: str) -> None:  # noqa: B027 - default no-op
-        """The client aborted the COPY. Default: no-op."""
+        """The client sent `CopyFail` with `message`. Default: no-op."""
 
 
-__all__ = ["CopyHandler", "CopyInfo"]
+__all__ = ["CopyHandler"]
